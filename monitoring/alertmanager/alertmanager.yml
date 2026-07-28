@@ -1,0 +1,31 @@
+route:
+  receiver: default
+  group_by: ['alertname', 'instance']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - matchers:
+        - severity = "critical"
+      receiver: critical
+      repeat_interval: 1h
+
+receivers:
+  - name: default
+    webhook_configs:
+      - url: http://alert-sink:8080/default
+        send_resolved: true
+
+  - name: critical
+    webhook_configs:
+      - url: http://alert-sink:8080/critical
+        send_resolved: true
+
+# A host that is down will also trip its disk and service alerts. Suppressing
+# the consequences keeps the notification about the cause.
+inhibit_rules:
+  - source_matchers:
+      - alertname = "NodeDown"
+    target_matchers:
+      - severity =~ "warning|critical"
+    equal: ['instance']
