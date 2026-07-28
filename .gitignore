@@ -1,0 +1,21 @@
+# Secrets — never commit real credentials
+.env
+*.password
+*.secret
+*.cred
+credentials/
+restic-password.txt
+
+# Runtime data volumes
+monitoring/grafana-data/
+monitoring/prometheus-data/
+monitoring/alertmanager-data/
+
+# Generated health check reports (a curated sample lives in sample-reports/)
+HealthChecks/
+*.local.html
+
+# OS noise
+Thumbs.db
+desktop.ini
+.DS_Store
