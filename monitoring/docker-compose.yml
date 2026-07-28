@@ -1,12 +1,21 @@
 name: infralab-monitoring
 
+# Published ports are bound to MON01's lab address rather than 0.0.0.0. None of
+# these services authenticate their read paths, and Prometheus and Alertmanager
+# both expose state-changing endpoints without auth, so they must not be
+# reachable from the temporary NAT adapter or any other host interface.
+# LAB_BIND is set in .env and must exist on the host before the stack starts;
+# a bind failure is the correct, loud way to find out that it does not.
+
 services:
   prometheus:
     image: prom/prometheus:v2.53.0
     container_name: prometheus
     restart: unless-stopped
     ports:
-      - "9090:9090"
+      # --web.enable-lifecycle below exposes POST /-/reload with no
+      # authentication. Kept for operational convenience, contained by the bind.
+      - "${LAB_BIND:-127.0.0.1}:9090:9090"
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
@@ -22,7 +31,9 @@ services:
     container_name: alertmanager
     restart: unless-stopped
     ports:
-      - "9093:9093"
+      # Unauthenticated. Anyone who reaches this port can create silences, which
+      # is indistinguishable from an outage nobody was told about.
+      - "${LAB_BIND:-127.0.0.1}:9093:9093"
     volumes:
       - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
       - alertmanager-data:/alertmanager
@@ -42,8 +53,12 @@ services:
     image: prom/blackbox-exporter:v0.25.0
     container_name: blackbox
     restart: unless-stopped
-    ports:
-      - "9115:9115"
+    # Deliberately no published port. /probe?target=<anything> makes this an
+    # open request proxy: whoever reaches it can have the container fetch a URL
+    # or connect to a host of their choosing. Prometheus reaches it as
+    # blackbox:9115 over the compose network, so publishing it buys nothing and
+    # costs an SSRF primitive. To query it by hand:
+    #   docker compose exec blackbox wget -qO- 'localhost:9115/probe?target=192.168.56.10&module=icmp'
     volumes:
       - ./blackbox/blackbox.yml:/etc/blackbox_exporter/config.yml:ro
     cap_add:
@@ -54,7 +69,7 @@ services:
     container_name: grafana
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "${LAB_BIND:-127.0.0.1}:3000:3000"
     env_file: ../.env
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro

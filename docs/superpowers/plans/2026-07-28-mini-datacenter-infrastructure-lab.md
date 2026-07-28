@@ -132,6 +132,13 @@ desktop.ini
 # Copy to .env in the repository root before starting the monitoring stack.
 # .env is gitignored. Never commit real values.
 
+# Interface the monitoring stack publishes its ports on. This is MON01's lab
+# address, NOT 0.0.0.0. Prometheus and Alertmanager have no authentication and
+# both expose state-changing endpoints, so they must not be reachable from the
+# temporary NAT adapter. The address must already exist on the host or Docker
+# will refuse to bind — which is the correct way to notice it is missing.
+LAB_BIND=192.168.56.20
+
 # Grafana initial administrator account.
 GF_SECURITY_ADMIN_USER=admin
 GF_SECURITY_ADMIN_PASSWORD=change-me-before-first-start
@@ -921,7 +928,9 @@ services:
     container_name: prometheus
     restart: unless-stopped
     ports:
-      - "9090:9090"
+      # --web.enable-lifecycle below exposes POST /-/reload with no
+      # authentication. Kept for operational convenience, contained by the bind.
+      - "${LAB_BIND:-127.0.0.1}:9090:9090"
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
@@ -937,7 +946,9 @@ services:
     container_name: alertmanager
     restart: unless-stopped
     ports:
-      - "9093:9093"
+      # Unauthenticated. Anyone who reaches this port can create silences, which
+      # is indistinguishable from an outage nobody was told about.
+      - "${LAB_BIND:-127.0.0.1}:9093:9093"
     volumes:
       - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
       - alertmanager-data:/alertmanager
@@ -957,8 +968,11 @@ services:
     image: prom/blackbox-exporter:v0.25.0
     container_name: blackbox
     restart: unless-stopped
-    ports:
-      - "9115:9115"
+    # Deliberately no published port. /probe?target=<anything> makes this an
+    # open request proxy: whoever reaches it can have the container fetch a URL
+    # or connect to a host of their choosing. Prometheus reaches it as
+    # blackbox:9115 over the compose network, so publishing it buys nothing and
+    # costs an SSRF primitive.
     volumes:
       - ./blackbox/blackbox.yml:/etc/blackbox_exporter/config.yml:ro
     cap_add:
@@ -969,7 +983,7 @@ services:
     container_name: grafana
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "${LAB_BIND:-127.0.0.1}:3000:3000"
     env_file: ../.env
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
@@ -1598,7 +1612,11 @@ cd /opt/infralab
 cp .env.example .env
 ```
 
-Edit `.env` and set a real Grafana password. Then prove it cannot be committed:
+Edit `.env` and set a real Grafana password. Confirm `LAB_BIND=192.168.56.20`
+matches this host's lab address — Docker binds the published ports to it, and
+will refuse to start the stack if the address does not exist yet.
+
+Then prove the file cannot be committed:
 
 ```bash
 git check-ignore -v .env
@@ -1637,11 +1655,15 @@ curl -s localhost:9090/-/healthy
 curl -s 'localhost:9090/api/v1/query?query=up{job="node"}' |
   python3 -c 'import json,sys; [print(r["metric"]["host"], r["value"][1]) for r in json.load(sys.stdin)["data"]["result"]]'
 
-# Blackbox reaches DC01 by ICMP.
-curl -s 'localhost:9115/probe?target=192.168.56.10&module=icmp' | grep '^probe_success'
+# Blackbox reaches DC01 by ICMP. Queried from inside the container: blackbox
+# publishes no host port, because /probe?target= would otherwise let anyone who
+# reaches it use the container as a request proxy.
+docker compose exec blackbox \
+  wget -qO- 'localhost:9115/probe?target=192.168.56.10&module=icmp' | grep '^probe_success'
 
 # Blackbox actually resolves the domain, not merely reaches port 53.
-curl -s 'localhost:9115/probe?target=192.168.56.10&module=dns_soa' | grep '^probe_success'
+docker compose exec blackbox \
+  wget -qO- 'localhost:9115/probe?target=192.168.56.10&module=dns_soa' | grep '^probe_success'
 
 # Alertmanager is up.
 curl -s localhost:9093/-/healthy
@@ -1751,10 +1773,38 @@ the cause, not its six consequences.
 Email was considered and rejected: it needs SMTP credentials in the lab and
 demonstrates nothing the webhook path does not.
 
+## Exposure of the monitoring stack itself
+
+Monitoring tools are usually deployed as though they were harmless. They are not:
+
+- **Prometheus** has no authentication. Its metrics are a detailed inventory of
+  every host, and `--web.enable-lifecycle` exposes `POST /-/reload` to anyone
+  who can reach port 9090.
+- **Alertmanager** has no authentication. Anyone who reaches port 9093 can
+  create a silence, and a silenced alert is indistinguishable from no incident.
+- **Blackbox exporter** is a request proxy by design. `/probe?target=` will
+  fetch a URL or open a connection to whatever it is given, so an exposed
+  blackbox exporter is a ready-made SSRF primitive pointed at the internal
+  network.
+
+Accordingly:
+
+| Service | Exposure |
+|---|---|
+| Prometheus, Alertmanager, Grafana | Published only on `LAB_BIND` (MON01's lab address), never `0.0.0.0`, so the temporary NAT adapter cannot reach them |
+| Blackbox exporter | No published port at all. Prometheus reaches it as `blackbox:9115` over the compose network; query it by hand with `docker compose exec` |
+| windows_exporter on DC01 | Firewall rule scoped to MON01's address only |
+
+In production these would additionally sit behind an authenticating reverse
+proxy. Binding and network placement are what a lab can do; they are a
+mitigation, not a substitute for authentication.
+
 ## Known gaps
 
 - Single monitoring host. If MON01 is down, nothing is watching and nothing will
   say so. Production needs redundant collection.
+- No authentication on Prometheus or Alertmanager, mitigated only by binding and
+  network placement as described above.
 - No long-term metric storage; 30 days local retention only.
 - No end-to-end synthetic check of domain authentication. `dcdiag` on DC01
   partially covers this; a real check would attempt a Kerberos authentication
