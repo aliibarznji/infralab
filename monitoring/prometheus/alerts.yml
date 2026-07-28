@@ -1,0 +1,145 @@
+groups:
+  - name: infrastructure
+    rules:
+      - alert: NodeDown
+        expr: up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Scrape target {{ $labels.instance }} is down"
+          description: "Prometheus job {{ $labels.job }} cannot reach {{ $labels.instance }}. Either the host is down or its exporter has stopped."
+
+      - alert: DiskSpaceLow
+        expr: >-
+          100 - (node_filesystem_avail_bytes{fstype!~"tmpfs|squashfs|overlay"}
+          / node_filesystem_size_bytes{fstype!~"tmpfs|squashfs|overlay"} * 100) > 85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Filesystem {{ $labels.mountpoint }} on {{ $labels.instance }} is over 85% full"
+          description: "Linux filesystem usage crossed the warning threshold. Investigate before it reaches 95%."
+
+      - alert: DiskSpaceCritical
+        expr: >-
+          100 - (node_filesystem_avail_bytes{fstype!~"tmpfs|squashfs|overlay"}
+          / node_filesystem_size_bytes{fstype!~"tmpfs|squashfs|overlay"} * 100) > 95
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Filesystem {{ $labels.mountpoint }} on {{ $labels.instance }} is over 95% full"
+          description: "Failure is imminent. Reclaim space now."
+
+      - alert: WindowsDiskSpaceLow
+        expr: 100 - (windows_logical_disk_free_bytes / windows_logical_disk_size_bytes * 100) > 85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Volume {{ $labels.volume }} on {{ $labels.instance }} is over 85% full"
+          description: "Windows volume usage crossed the warning threshold."
+
+      - alert: WindowsDiskSpaceCritical
+        expr: 100 - (windows_logical_disk_free_bytes / windows_logical_disk_size_bytes * 100) > 95
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Volume {{ $labels.volume }} on {{ $labels.instance }} is over 95% full"
+          description: "Failure is imminent. On a domain controller a full system volume can damage the AD database."
+
+      - alert: WindowsServiceDown
+        expr: windows_service_state{name=~"NTDS|DNS|DHCPServer|Netlogon",state="running"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Windows service {{ $labels.name }} is not running on {{ $labels.instance }}"
+          description: "Service {{ $labels.name }} left the running state. Domain services depend on it."
+
+  - name: probes
+    rules:
+      - alert: ICMPProbeFailed
+        expr: probe_success{job="blackbox_icmp"} == 0
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.instance }} is not responding to ICMP"
+          description: "The host is unreachable on the lab segment."
+
+      - alert: TCPProbeFailed
+        expr: probe_success{job="blackbox_tcp"} == 0
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "TCP probe to {{ $labels.instance }} failed"
+          description: "The port stopped accepting connections. Note that an open port alone never proved the service works."
+
+      - alert: DNSProbeFailed
+        expr: probe_success{job="blackbox_dns"} == 0
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "DNS server {{ $labels.instance }} is not answering for corp.infralab.test"
+          description: "The SOA query failed. Domain controller discovery and new authentication will fail while this persists, though existing sessions may continue on cached records and unexpired tickets."
+
+      - alert: HTTPProbeFailed
+        expr: probe_success{job="blackbox_http"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "HTTP probe to {{ $labels.instance }} failed"
+          description: "A monitoring web interface is not serving. Monitoring being down is itself an incident."
+
+  - name: backup
+    rules:
+      - alert: SMBShareUnavailable
+        expr: infralab_smb_share_available == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The DC01 share is not readable from {{ $labels.instance }}"
+          description: "The mount is gone or the credentials no longer work. Backups will fail at the next run."
+
+      - alert: BackupFailed
+        expr: infralab_backup_last_run_success == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The most recent backup run failed on {{ $labels.instance }}"
+          description: "Read the job output with: journalctl -u infralab-backup.service -n 50"
+
+      - alert: BackupStale
+        expr: time() - infralab_backup_last_success_timestamp_seconds > 26 * 3600
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No successful backup on {{ $labels.instance }} in over 26 hours"
+          description: "The backup job has not recorded a success within the 26 hour threshold. Check infralab-backup.timer and the SMB mount on BKP01."
+
+      - alert: RestoreTestFailed
+        expr: infralab_restore_test_success == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Restore verification failed on {{ $labels.instance }}"
+          description: "The most recent restore test did not match the source. A backup that cannot be restored is not a backup. Run verify-restore.sh manually and read its diff output."
+
+      - alert: RestoreTestStale
+        expr: time() - infralab_restore_test_last_success_timestamp_seconds > 8 * 24 * 3600
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No passing restore test on {{ $labels.instance }} in over 8 days"
+          description: "The weekly restore verification has not passed. Backups are unproven until it does."

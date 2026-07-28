@@ -1,0 +1,78 @@
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  # The single most important rule in the system: the one that fires when
+  # backups have quietly stopped and nobody has noticed.
+  - interval: 1m
+    name: BackupStale fires once the last success is older than 26 hours
+    input_series:
+      - series: 'infralab_backup_last_success_timestamp_seconds{instance="192.168.56.30:9100",job="node",host="BKP01"}'
+        values: '0+0x1700'
+    alert_rule_test:
+      - eval_time: 20h
+        alertname: BackupStale
+        exp_alerts: []
+      - eval_time: 27h
+        alertname: BackupStale
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              instance: "192.168.56.30:9100"
+              job: node
+              host: BKP01
+            exp_annotations:
+              summary: "No successful backup on 192.168.56.30:9100 in over 26 hours"
+              description: "The backup job has not recorded a success within the 26 hour threshold. Check infralab-backup.timer and the SMB mount on BKP01."
+
+  # A watched service leaving the running state must alert, but not so fast that
+  # a service restart during patching pages someone.
+  - interval: 1m
+    name: WindowsServiceDown fires after the DNS service stops for 2 minutes
+    input_series:
+      - series: 'windows_service_state{instance="192.168.56.10:9182",job="windows",host="DC01",name="DNS",state="running"}'
+        values: '1 1 1 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: WindowsServiceDown
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: WindowsServiceDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              instance: "192.168.56.10:9182"
+              job: windows
+              host: DC01
+              name: DNS
+              state: running
+            exp_annotations:
+              summary: "Windows service DNS is not running on 192.168.56.10:9182"
+              description: "Service DNS left the running state. Domain services depend on it."
+
+  # A restore test can fail while the backup itself succeeded. Proving these are
+  # independent is the whole reason there are four metrics instead of one.
+  - interval: 1m
+    name: RestoreTestFailed fires independently of backup success
+    input_series:
+      - series: 'infralab_restore_test_success{instance="192.168.56.30:9100",job="node",host="BKP01"}'
+        values: '1 1 0 0 0 0 0 0 0 0'
+      - series: 'infralab_backup_last_run_success{instance="192.168.56.30:9100",job="node",host="BKP01"}'
+        values: '1+0x10'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: RestoreTestFailed
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              instance: "192.168.56.30:9100"
+              job: node
+              host: BKP01
+            exp_annotations:
+              summary: "Restore verification failed on 192.168.56.30:9100"
+              description: "The most recent restore test did not match the source. A backup that cannot be restored is not a backup. Run verify-restore.sh manually and read its diff output."
+      - eval_time: 9m
+        alertname: BackupFailed
+        exp_alerts: []
