@@ -4,10 +4,9 @@ rule_files:
 evaluation_interval: 1m
 
 tests:
-  # The single most important rule in the system: the one that fires when
-  # backups have quietly stopped and nobody has noticed.
+  # The rule that catches backups which have quietly stopped running.
   - interval: 1m
-    name: BackupStale fires once the last success is older than 26 hours
+    name: BackupStale fires once the last success is older than 25 hours
     input_series:
       - series: 'infralab_backup_last_success_timestamp_seconds{instance="192.168.56.30:9100",job="node",host="BKP01"}'
         values: '0+0x1700'
@@ -15,7 +14,7 @@ tests:
       - eval_time: 20h
         alertname: BackupStale
         exp_alerts: []
-      - eval_time: 27h
+      - eval_time: 26h
         alertname: BackupStale
         exp_alerts:
           - exp_labels:
@@ -24,43 +23,60 @@ tests:
               job: node
               host: BKP01
             exp_annotations:
-              summary: "No successful backup on 192.168.56.30:9100 in over 26 hours"
-              description: "The backup job has not recorded a success within the 26 hour threshold. Check infralab-backup.timer and the SMB mount on BKP01."
+              summary: "No successful backup on 192.168.56.30:9100 in over 25 hours"
+              description: "The backup job has not recorded a success within the 25 hour threshold. Check root's crontab on BKP01 and the CIFS mount at /mnt/dc01-share."
 
-  # A watched service leaving the running state must alert, but not so fast that
-  # a service restart during patching pages someone.
+  # A failed run must alert even though the last-success timestamp is still
+  # published. Publishing both is what lets these be distinguished.
   - interval: 1m
-    name: WindowsServiceDown fires after the DNS service stops for 2 minutes
+    name: BackupFailed fires on a non-zero exit code while the success timestamp stays intact
     input_series:
-      - series: 'windows_service_state{instance="192.168.56.10:9182",job="windows",host="DC01",name="DNS",state="running"}'
-        values: '1 1 1 0 0 0 0 0'
+      - series: 'infralab_backup_last_run_exit_code{instance="192.168.56.30:9100",job="node",host="BKP01"}'
+        values: '0 0 1 1 1 1 1 1 1 1'
+      - series: 'infralab_backup_last_success_timestamp_seconds{instance="192.168.56.30:9100",job="node",host="BKP01"}'
+        values: '100+0x10'
     alert_rule_test:
-      - eval_time: 4m
-        alertname: WindowsServiceDown
-        exp_alerts: []
-      - eval_time: 6m
-        alertname: WindowsServiceDown
+      - eval_time: 9m
+        alertname: BackupFailed
         exp_alerts:
           - exp_labels:
               severity: critical
-              instance: "192.168.56.10:9182"
-              job: windows
-              host: DC01
-              name: DNS
-              state: running
+              instance: "192.168.56.30:9100"
+              job: node
+              host: BKP01
             exp_annotations:
-              summary: "Windows service DNS is not running on 192.168.56.10:9182"
-              description: "Service DNS left the running state. Domain services depend on it."
+              summary: "The most recent backup run failed on 192.168.56.30:9100"
+              description: "backup-dc01.sh exited non-zero. Check its cron output and /var/log/syslog on BKP01."
+
+  # An unmounted CIFS share is the failure that would otherwise produce a valid
+  # but empty snapshot.
+  - interval: 1m
+    name: BackupMountMissing fires when the share was not mounted at backup time
+    input_series:
+      - series: 'infralab_backup_mount_ok{instance="192.168.56.30:9100",job="node",host="BKP01"}'
+        values: '1 1 0 0 0 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: BackupMountMissing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              instance: "192.168.56.30:9100"
+              job: node
+              host: BKP01
+            exp_annotations:
+              summary: "The CompanyShare CIFS mount was unavailable at backup time on 192.168.56.30:9100"
+              description: "An unmounted CIFS mountpoint is an empty directory, and backing it up would produce a valid but empty snapshot. The job refused to run rather than create one."
 
   # A restore test can fail while the backup itself succeeded. Proving these are
-  # independent is the whole reason there are four metrics instead of one.
+  # independent is the reason both are published.
   - interval: 1m
     name: RestoreTestFailed fires independently of backup success
     input_series:
       - series: 'infralab_restore_test_success{instance="192.168.56.30:9100",job="node",host="BKP01"}'
         values: '1 1 0 0 0 0 0 0 0 0'
-      - series: 'infralab_backup_last_run_success{instance="192.168.56.30:9100",job="node",host="BKP01"}'
-        values: '1+0x10'
+      - series: 'infralab_backup_last_run_exit_code{instance="192.168.56.30:9100",job="node",host="BKP01"}'
+        values: '0+0x10'
     alert_rule_test:
       - eval_time: 9m
         alertname: RestoreTestFailed
@@ -72,7 +88,28 @@ tests:
               host: BKP01
             exp_annotations:
               summary: "Restore verification failed on 192.168.56.30:9100"
-              description: "The most recent restore test did not match the source. A backup that cannot be restored is not a backup. Run verify-restore.sh manually and read its diff output."
+              description: "The most recent restore test did not match the live share. A backup that cannot be restored is not a backup. Run verify-restore.sh by hand and read its diff output."
       - eval_time: 9m
         alertname: BackupFailed
         exp_alerts: []
+
+  # The DNS probe that INC-001 showed was missing.
+  - interval: 1m
+    name: DNSProbeFailed fires when DC01 stops answering for the zone
+    input_series:
+      - series: 'probe_success{instance="192.168.56.10",job="blackbox_dns"}'
+        values: '1 1 0 0 0 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: DNSProbeFailed
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: DNSProbeFailed
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              instance: "192.168.56.10"
+              job: blackbox_dns
+            exp_annotations:
+              summary: "DNS server 192.168.56.10 is not answering for lab.local"
+              description: "The SOA query failed. Domain controller discovery and new authentication will fail while this persists, though existing sessions may continue on cached records and unexpired Kerberos tickets, and short names may still resolve via NetBIOS."

@@ -61,14 +61,18 @@ groups:
 
   - name: probes
     rules:
-      - alert: ICMPProbeFailed
-        expr: probe_success{job="blackbox_icmp"} == 0
+      # INC-001: stopping the DNS service did not look like an outage from
+      # outside. ICMP still answered and short names still resolved through
+      # NetBIOS/LLMNR fallback. This probe asks for the SOA record and fails
+      # when the server cannot answer, which is the signal that was missing.
+      - alert: DNSProbeFailed
+        expr: probe_success{job="blackbox_dns"} == 0
         for: 3m
         labels:
           severity: critical
         annotations:
-          summary: "{{ $labels.instance }} is not responding to ICMP"
-          description: "The host is unreachable on the lab segment."
+          summary: "DNS server {{ $labels.instance }} is not answering for lab.local"
+          description: "The SOA query failed. Domain controller discovery and new authentication will fail while this persists, though existing sessions may continue on cached records and unexpired Kerberos tickets, and short names may still resolve via NetBIOS."
 
       - alert: TCPProbeFailed
         expr: probe_success{job="blackbox_tcp"} == 0
@@ -79,52 +83,55 @@ groups:
           summary: "TCP probe to {{ $labels.instance }} failed"
           description: "The port stopped accepting connections. Note that an open port alone never proved the service works."
 
-      - alert: DNSProbeFailed
-        expr: probe_success{job="blackbox_dns"} == 0
+      - alert: ICMPProbeFailed
+        expr: probe_success{job="blackbox_icmp"} == 0
         for: 3m
         labels:
           severity: critical
         annotations:
-          summary: "DNS server {{ $labels.instance }} is not answering for corp.infralab.test"
-          description: "The SOA query failed. Domain controller discovery and new authentication will fail while this persists, though existing sessions may continue on cached records and unexpired tickets."
-
-      - alert: HTTPProbeFailed
-        expr: probe_success{job="blackbox_http"} == 0
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "HTTP probe to {{ $labels.instance }} failed"
-          description: "A monitoring web interface is not serving. Monitoring being down is itself an incident."
+          summary: "{{ $labels.instance }} is not responding to ICMP"
+          description: "The host is unreachable on the lab segment."
 
   - name: backup
     rules:
-      - alert: SMBShareUnavailable
-        expr: infralab_smb_share_available == 0
+      # The most important rule here: it fires when backups have quietly stopped
+      # and nobody has noticed. 25 hours, not 24, so a daily job running a few
+      # minutes late does not alert every single day.
+      - alert: BackupStale
+        expr: time() - infralab_backup_last_success_timestamp_seconds > 25 * 3600
         for: 5m
         labels:
-          severity: warning
+          severity: critical
         annotations:
-          summary: "The DC01 share is not readable from {{ $labels.instance }}"
-          description: "The mount is gone or the credentials no longer work. Backups will fail at the next run."
+          summary: "No successful backup on {{ $labels.instance }} in over 25 hours"
+          description: "The backup job has not recorded a success within the 25 hour threshold. Check root's crontab on BKP01 and the CIFS mount at /mnt/dc01-share."
 
       - alert: BackupFailed
-        expr: infralab_backup_last_run_success == 0
+        expr: infralab_backup_last_run_exit_code != 0
         for: 5m
         labels:
           severity: critical
         annotations:
           summary: "The most recent backup run failed on {{ $labels.instance }}"
-          description: "Read the job output with: journalctl -u infralab-backup.service -n 50"
+          description: "backup-dc01.sh exited non-zero. Check its cron output and /var/log/syslog on BKP01."
 
-      - alert: BackupStale
-        expr: time() - infralab_backup_last_success_timestamp_seconds > 26 * 3600
+      - alert: BackupMountMissing
+        expr: infralab_backup_mount_ok == 0
         for: 5m
         labels:
           severity: critical
         annotations:
-          summary: "No successful backup on {{ $labels.instance }} in over 26 hours"
-          description: "The backup job has not recorded a success within the 26 hour threshold. Check infralab-backup.timer and the SMB mount on BKP01."
+          summary: "The CompanyShare CIFS mount was unavailable at backup time on {{ $labels.instance }}"
+          description: "An unmounted CIFS mountpoint is an empty directory, and backing it up would produce a valid but empty snapshot. The job refused to run rather than create one."
+
+      - alert: BackupSnapshotCountDropped
+        expr: delta(infralab_backup_snapshot_count[2h]) < -1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Snapshot count on {{ $labels.instance }} fell by more than one"
+          description: "Retention removes at most one snapshot per daily run under the current policy. A larger drop suggests forget/prune removed more than intended, or the repository was modified outside the job."
 
       - alert: RestoreTestFailed
         expr: infralab_restore_test_success == 0
@@ -133,7 +140,7 @@ groups:
           severity: critical
         annotations:
           summary: "Restore verification failed on {{ $labels.instance }}"
-          description: "The most recent restore test did not match the source. A backup that cannot be restored is not a backup. Run verify-restore.sh manually and read its diff output."
+          description: "The most recent restore test did not match the live share. A backup that cannot be restored is not a backup. Run verify-restore.sh by hand and read its diff output."
 
       - alert: RestoreTestStale
         expr: time() - infralab_restore_test_last_success_timestamp_seconds > 8 * 24 * 3600
