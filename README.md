@@ -1,61 +1,250 @@
 # Mini Datacenter Infrastructure Lab
 
-> This is an independent personal learning project created to demonstrate infrastructure engineering skills. It is not affiliated with, endorsed by, or produced by any company or organization. No real company systems, data, branding, or logos are used.
+A self-hosted lab simulating a small company IT environment: Active Directory domain services, centralised file storage, monitoring, automated backup with verified disaster recovery, and documented incident response.
 
-A small, fully documented datacenter built on a laptop: a Windows Server domain,
-a Prometheus and Grafana monitoring stack, and restic backups that are restored
-and checksum-verified on a schedule rather than assumed to work.
+Built on VMware Workstation Pro on a single laptop (16 GB RAM, i7-11800H), fully isolated on a host-only network.
 
-The lab runs on VMware Workstation. This repository is the part that travels —
-the automation, the configuration, the operational documentation, and the
-incident record.
+---
 
-## What is in here
+## Architecture
 
-| Area | Where |
-|---|---|
-| Architecture, network and domain design | `docs/architecture.md` |
-| Asset inventory | `docs/inventory.md` |
-| Monitoring and alerting policy | `docs/monitoring-policy.md` |
-| Backup and restore policy | `docs/backup-policy.md` |
-| Risk register | `docs/risks.md` |
-| Change records | `docs/changes/` |
-| Incident root-cause analyses | `docs/incidents/` |
-| Runbooks | `docs/runbooks/` |
-| Monitoring stack as code | `monitoring/` |
-| Backup and verification scripts | `scripts/linux/` |
-| Windows health check | `scripts/windows/` |
+```
+                    Host-only network: VMnet2
+                       192.168.56.0/24
+                  (VMware DHCP disabled — DC01 serves DHCP)
 
-## Environment
+  ┌──────────────┬──────────────┬──────────────┬──────────────┐
+  │    DC01      │    MON01     │    BKP01     │   CLIENT01   │
+  │ 192.168.56.10│ 192.168.56.20│ 192.168.56.30│192.168.56.101│
+  │              │              │              │    (DHCP)    │
+  │ Win Server   │ Ubuntu 26.04 │ Ubuntu 26.04 │ Windows 11   │
+  │ 2022 Std     │              │              │ Pro          │
+  │ 4 GB RAM     │ 3 GB RAM     │ 1.5 GB RAM   │ 4 GB RAM     │
+  ├──────────────┼──────────────┼──────────────┼──────────────┤
+  │ AD DS        │ Prometheus   │ Restic       │ Domain-joined│
+  │ DNS          │ Grafana      │ CIFS mount   │ SSO to share │
+  │ DHCP         │ Node Exporter│ Cron backup  │              │
+  │ SMB share    │ Health checks│              │              │
+  └──────────────┴──────────────┴──────────────┴──────────────┘
+```
 
-| Host | OS | RAM | IP | Role |
-|---|---|---|---|---|
-| DC01 | Windows Server 2022 | 4 GB | 192.168.56.10 | AD DS, DNS, DHCP, SMB share |
-| MON01 | Ubuntu 24.04 | 3 GB | 192.168.56.20 | Prometheus, Grafana, Alertmanager, Blackbox |
-| BKP01 | Ubuntu 24.04 | 1.5 GB | 192.168.56.30 | restic repository, backup and restore verification |
-| CLIENT01 | Windows 10/11 | 2 GB | DHCP | Domain member, started on demand |
-
-Domain: `corp.infralab.test` (NetBIOS `INFRALAB`). Host-only network `VMnet2`,
-`192.168.56.0/24`, with VMware's own DHCP disabled so DC01 is the only DHCP
-server on the segment.
-
-## Build status
-
-| Phase | Deliverable | Status |
+| Role | Host | Purpose |
 |---|---|---|
-| 0 | Repository skeleton, network, ISOs | in progress |
-| 1 | DC01 — AD DS, DNS, DHCP, SMB share | not started |
-| 2 | CLIENT01 — domain join verification | not started |
-| 3 | MON01 — monitoring stack | not started |
-| 4 | BKP01 — backups | not started |
-| 5 | Restore verification | not started |
-| 6 | Windows health checks | not started |
-| 7 | Incident simulations | not started |
-| 8 | VMware Hands-on Labs | not started |
-| 9 | Final documentation pass | not started |
+| Domain Controller | DC01 | Identity, name resolution, address assignment, file services |
+| Monitoring | MON01 | Metrics collection, dashboards, scheduled health checks |
+| Backup | BKP01 | Encrypted, deduplicated, automated off-host backup |
+| Workstation | CLIENT01 | End-user machine validating the domain from a user's perspective |
 
-## Credentials
+---
 
-Credentials and repository passwords are stored locally and are not committed
-to source control. `.env.example` and `scripts/linux/config.example` show the
-required shape with placeholder values.
+## DC01 — Domain Controller (Windows Server 2022)
+
+**Forest / domain:** `lab.local`
+
+**Roles installed:** AD DS, DNS, DHCP, File and Storage Services
+
+**Organisational Unit structure**
+
+```
+lab.local
+└── Company
+    ├── Computers   → CLIENT01
+    ├── Employees   → user account "Ali"
+    └── Groups      → security group "IT-Team" (Global / Security)
+```
+
+**File share:** `CompanyShare` → `C:\CompanyShare`
+
+### Access control
+
+The share was initially created with the default `Everyone: Full Control`, which grants access to any authenticated principal and is not acceptable in a production environment. It was replaced with group-based access:
+
+**Share permissions**
+
+| Principal | Access |
+|---|---|
+| `LAB\IT-Team` | Full Control |
+
+`Everyone` removed.
+
+**NTFS permissions**
+
+| Principal | Access | Applies to |
+|---|---|---|
+| SYSTEM | Full control | This folder, subfolders and files |
+| Administrators | Full control | This folder, subfolders and files |
+| CREATOR OWNER | Full control | Subfolders and files only |
+| `LAB\IT-Team` | Full control | This folder, subfolders and files |
+
+Inheritance from `C:\` was disabled and inherited entries removed, because the parent volume propagates `Users` (Read & Execute), which would have re-granted read access to every domain user and silently defeated the share-level restriction. Permissions were then pushed down to existing child objects.
+
+Both layers were tightened. Effective access on an SMB share is the intersection of share and NTFS permissions, so leaving NTFS at defaults would have left the folder over-permissive to anyone accessing it locally or via a different share path.
+
+### Verification
+
+Access was tested from CLIENT01 as `lab\ali`:
+
+- Read: directory listing succeeded
+- Write: file creation initially returned *Destination Folder Access Denied*
+
+`whoami /groups` showed no domain groups in the token — the session was running on a cached logon issued before `IT-Team` existed. Group membership is written into the access token at logon and is not refreshed live. After signing out and back in, the token contained `LAB\IT-Team` and both read and write succeeded.
+
+Read had appeared to work during the failure because the SMB session was already established; only the new write operation triggered a fresh authorisation check.
+
+---
+
+## MON01 — Monitoring (Ubuntu 26.04)
+
+| Component | Version | Port |
+|---|---|---|
+| Prometheus | 3.13.1 | 9090 |
+| Grafana | 13.1.1 | 3000 |
+| Node Exporter | — | 9100 |
+
+All run as systemd services. Dashboard: *Node Exporter Full* (Grafana ID 1860), showing live CPU, memory, disk, and network metrics.
+
+The NAT adapter was removed after setup so the host sits only on VMnet2, keeping the lab isolated from the internet.
+
+### Scheduled health checks
+
+`/usr/local/bin/health-check.sh` runs hourly via cron and logs to `/var/log/health-check.log`. It verifies:
+
+- ICMP reachability of DC01 and BKP01
+- DNS resolution of `dc01.lab.local` against DC01
+- `active` state of prometheus, grafana-server, prometheus-node-exporter
+- Root filesystem usage, warning above 80%
+
+Sample output:
+
+```
+===== Wed Jul 29 09:32:52 AM UTC 2026 =====
+OK   ping 192.168.56.10
+OK   ping 192.168.56.30
+OK   dns dc01.lab.local
+OK   service prometheus
+OK   service grafana-server
+OK   service prometheus-node-exporter
+OK   disk / 68%
+```
+
+The first run reported `FAIL service node_exporter`. The service was in fact healthy — the packaged unit is named `prometheus-node-exporter`. A monitoring check that reports a false failure is a real defect, since alert fatigue leads to genuine alerts being ignored, so the script was corrected rather than the result being dismissed.
+
+---
+
+## BKP01 — Backup (Ubuntu 26.04)
+
+**Tool:** Restic 0.18.1 — encrypted, deduplicated, snapshot-based
+
+**Repository:** `/var/backups/restic-repo`
+
+**Source:** DC01's `CompanyShare`, mounted over CIFS at `/mnt/dc01-share` via `/etc/fstab`
+
+**Schedule:** `0 2 * * *` — daily at 02:00 via cron
+
+### Credential handling
+
+| File | Purpose | Mode |
+|---|---|---|
+| `/etc/dc01-creds` | CIFS mount credentials | 600 |
+| `/etc/restic-pass` | Restic repository password | 600 |
+
+Both are root-owned and mode 600 so the scheduled job can authenticate unattended without secrets appearing in the crontab, the script body, or process arguments visible to other users via `ps`.
+
+### Disaster recovery test
+
+A backup that has never been restored is not a backup. The full loop was tested end to end:
+
+1. Deleted `test1.txt` from `CompanyShare` on DC01
+2. Restored snapshot `7e7efe70` to `/tmp/restore-test` on BKP01
+3. Verified restored file contents matched the original
+4. Copied the file back to the live share
+5. Confirmed it reappeared on DC01
+
+Backups were re-verified after the permission lockdown described above, confirming the tightened ACLs did not break unattended access — the backup account is a member of `IT-Team`.
+
+**Operational note:** snapshots created by the cron job are owned by root. Restic commands against those snapshots must be run with `sudo` or they fail with permission errors on the repository files.
+
+---
+
+## CLIENT01 — Workstation (Windows 11 Pro)
+
+Windows 11 **Pro** was chosen over Home because Home cannot join an Active Directory domain.
+
+**Installation note:** Windows 11 OOBE requires internet connectivity before allowing local account creation, which is impossible on an isolated network. The documented `BypassNRO` registry method did not work reliably on this build. Working method: `Shift + F10` at the OOBE screen → `start ms-cxh:localonly` → close the resulting window, which drops through to local account creation.
+
+**Verified after domain join:**
+
+| Check | Result |
+|---|---|
+| DHCP lease from DC01 | `192.168.56.101` |
+| DNS suffix | `lab.local` |
+| Domain join | `lab.local` |
+| `whoami` | `lab\ali` |
+| `%USERDNSDOMAIN%` | `LAB.LOCAL` |
+| Share access | `\\DC01\CompanyShare` via SSO, no credential prompt |
+| Computer object | Present in `Company > Computers` OU |
+
+---
+
+## Incident Response
+
+### INC-001 — Name resolution failure
+
+**Symptom:** Users report the file share is unreachable by its full name.
+
+**Investigation**
+
+| Test | Result | Conclusion |
+|---|---|---|
+| `ping 192.168.56.10` | 4/4 replies, 0% loss | Network and host are up — not a connectivity fault |
+| `nslookup dc01.lab.local` | Request timed out | Name resolution is the failing layer |
+| `dir \\192.168.56.10\CompanyShare` | Succeeded | SMB service healthy |
+| `dir \\dc01\CompanyShare` | Succeeded | Short name resolved without DNS |
+| `dir \\dc01.lab.local\CompanyShare` | Failed | FQDN requires DNS |
+
+**Root cause:** The DNS Server service on DC01 had stopped.
+
+**Notable finding:** The short name continued to work throughout the outage, resolved by NetBIOS/LLMNR broadcast fallback on the local subnet. This is exactly the kind of partial symptom that misleads triage — some users would report no problem at all, while anything depending on the FQDN, and therefore anything Kerberos-dependent, would fail. Testing by IP, short name, and FQDN separately is what isolated the fault to the resolution layer rather than the file service.
+
+**Resolution**
+
+```powershell
+Start-Service DNS
+```
+
+```cmd
+ipconfig /flushdns
+```
+
+Client resolver cache was flushed because it had negatively cached the failed lookups.
+
+**Verification:** `nslookup dc01.lab.local` returned `192.168.56.10`; FQDN share access restored.
+
+**Preventive action:** Service recovery configured on the DNS Server service — restart on first, second, and subsequent failures, with a one-minute delay. The hourly health check on MON01 independently tests DNS resolution, so a repeat failure surfaces in the log rather than waiting on a user report.
+
+---
+
+## Skills Demonstrated
+
+| Area | Detail |
+|---|---|
+| Active Directory | Forest deployment, OU design, users, security groups, domain join |
+| Windows Server | DNS, DHCP, SMB file services, service recovery configuration |
+| Access control | Share and NTFS permissions, inheritance, group-based access, token behaviour |
+| Linux administration | systemd services, cron, CIFS mounts via fstab, secure credential files |
+| Monitoring | Prometheus, Grafana, node metrics, scripted health checks |
+| Backup & recovery | Encrypted snapshot backup, unattended scheduling, verified restore |
+| Troubleshooting | Layered isolation of a fault, root cause analysis, preventive remediation |
+| Documentation | Runbook-style writeups of configuration and incidents |
+
+---
+
+## Known Limitations
+
+Deliberately noted rather than hidden — this is a learning lab, not a production build.
+
+- **Single domain controller.** No redundancy; DC01 is a single point of failure for identity, DNS, and DHCP. Production would run at least two.
+- **Backups are on-site.** BKP01 holds the only copy and sits on the same physical host as DC01. This satisfies neither the "2 media" nor "1 off-site" parts of the 3-2-1 rule.
+- **Lab-grade passwords.** Credentials follow a predictable pattern and would need rotation, length, and a proper secrets store before anything resembling production use.
+- **No certificate services or centralised logging.** PKI, syslog aggregation, and alert routing from Alertmanager are the natural next additions.
+- **Health check logs locally only.** Results are written to a file on MON01; they are not yet exported to Prometheus or alerted on.
