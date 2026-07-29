@@ -1,0 +1,9 @@
+[Unit]
+Description=Verify that the latest restic snapshot restores correctly
+RequiresMountsFor=/mnt/dc01-share
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/verify-restore.sh
+Nice=15
+IOSchedulingClass=idle

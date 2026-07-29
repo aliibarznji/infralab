@@ -1,0 +1,11 @@
+[Unit]
+Description=Back up DC01 CompanyShare with restic
+After=network-online.target
+Wants=network-online.target
+RequiresMountsFor=/mnt/dc01-share
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/backup-dc01.sh
+Nice=10
+IOSchedulingClass=idle

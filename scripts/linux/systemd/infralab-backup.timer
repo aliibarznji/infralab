@@ -1,0 +1,17 @@
+[Unit]
+Description=Daily restic backup of DC01 CompanyShare
+
+[Timer]
+OnCalendar=*-*-* 02:00:00
+RandomizedDelaySec=15m
+
+# The reason this replaced cron. BKP01 is shut down whenever CLIENT01 runs, to
+# stay inside the 16 GB RAM budget. Cron simply skips a run scheduled while the
+# host was off; Persistent=true records the missed run and executes it at next
+# boot instead, so a powered-down evening does not become a day with no backup.
+Persistent=true
+
+Unit=infralab-backup.service
+
+[Install]
+WantedBy=timers.target
