@@ -1,3 +1,8 @@
+# Alertmanager configuration — MON01
+#
+# Deployed to /etc/alertmanager/alertmanager.yml. Runs as a native systemd
+# service, listening on localhost:9093.
+
 route:
   receiver: default
   group_by: ['alertname', 'instance']
@@ -11,18 +16,26 @@ route:
       repeat_interval: 1h
 
 receivers:
+  # Delivery goes to alert-sink, a local webhook receiver that appends every
+  # notification to /var/log/alert-sink.log. Alertmanager's own UI shows what is
+  # currently firing; the log shows what fired historically and when, which is
+  # what an incident record needs.
+  #
+  # Email and chat integrations were considered and rejected: both need
+  # credentials or internet access the lab does not have, and neither would
+  # demonstrate anything the webhook path does not.
   - name: default
     webhook_configs:
-      - url: http://alert-sink:8080/default
+      - url: http://127.0.0.1:9094/default
         send_resolved: true
 
   - name: critical
     webhook_configs:
-      - url: http://alert-sink:8080/critical
+      - url: http://127.0.0.1:9094/critical
         send_resolved: true
 
-# A host that is down will also trip its disk and service alerts. Suppressing
-# the consequences keeps the notification about the cause.
+# A host that is down will also trip its disk, service and probe alerts.
+# Suppressing the consequences keeps the notification about the cause.
 inhibit_rules:
   - source_matchers:
       - alertname = "NodeDown"

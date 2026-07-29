@@ -1,9 +1,27 @@
+# Blackbox exporter modules — MON01
+#
+# Deployed to /etc/prometheus/blackbox.yml on MON01. Installed from the
+# distribution package:  apt install prometheus-blackbox-exporter
+#
+# Listens on localhost:9115 only. /probe?target= will connect to whatever it is
+# given, so an exporter reachable from elsewhere on the network is a usable
+# request proxy into the lab. Prometheus scrapes it over the loopback interface,
+# so there is no reason to expose it further.
+
 modules:
-  icmp:
-    prober: icmp
+  # Asks DC01 an actual DNS question. A TCP probe on port 53 only proves
+  # something is listening; this proves the server can still answer for the zone
+  # it is authoritative for. This is the check that would have made INC-001
+  # visible immediately instead of being masked by NetBIOS name resolution.
+  dns_soa:
+    prober: dns
     timeout: 5s
-    icmp:
+    dns:
+      query_name: lab.local
+      query_type: SOA
       preferred_ip_protocol: ip4
+      valid_rcodes:
+        - NOERROR
 
   tcp_connect:
     prober: tcp
@@ -11,23 +29,8 @@ modules:
     tcp:
       preferred_ip_protocol: ip4
 
-  # Asks the DNS server an actual question. A TCP probe on port 53 proves only
-  # that something is listening; this proves the server can still answer for
-  # the zone it is authoritative for.
-  dns_soa:
-    prober: dns
+  icmp:
+    prober: icmp
     timeout: 5s
-    dns:
-      query_name: corp.infralab.test
-      query_type: SOA
+    icmp:
       preferred_ip_protocol: ip4
-      valid_rcodes:
-        - NOERROR
-
-  http_2xx:
-    prober: http
-    timeout: 5s
-    http:
-      preferred_ip_protocol: ip4
-      valid_status_codes: [200]
-      follow_redirects: true

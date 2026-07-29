@@ -1,0 +1,22 @@
+[Unit]
+Description=Local webhook receiver that logs Alertmanager notifications
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/bin/alert-sink.py
+Restart=on-failure
+RestartSec=5s
+
+# Writes only to its own log file and talks only to loopback.
+DynamicUser=yes
+LogsDirectory=alert-sink
+Environment=ALERT_SINK_LOG=/var/log/alert-sink/alert-sink.log
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+RestrictAddressFamilies=AF_INET
+
+[Install]
+WantedBy=multi-user.target
