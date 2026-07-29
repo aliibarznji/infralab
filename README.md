@@ -224,6 +224,49 @@ Client resolver cache was flushed because it had negatively cached the failed lo
 
 ---
 
+## Repository contents
+
+The lab runs on a laptop. This repository is the part that travels — the
+configuration, the automation, and the operational documentation.
+
+### Operational documentation
+
+| Document | Contents |
+|---|---|
+| [`docs/inventory.md`](docs/inventory.md) | Hosts, services, accounts, scheduled work, versions |
+| [`docs/monitoring-policy.md`](docs/monitoring-policy.md) | What is monitored, every threshold and why it is that number |
+| [`docs/backup-policy.md`](docs/backup-policy.md) | Scope, retention, verification, why a snapshot is not a backup |
+| [`docs/risks.md`](docs/risks.md) | Risk register, accepted risks, and risks closed |
+
+### Runbooks
+
+| Runbook | For |
+|---|---|
+| [`deploy-monitoring.md`](docs/runbooks/deploy-monitoring.md) | Deploying alerting and backup metrics across all four hosts |
+| [`restore-file.md`](docs/runbooks/restore-file.md) | Restoring a single file a user has lost |
+| [`dns-failure.md`](docs/runbooks/dns-failure.md) | DNS resolution failure, including the fallback paths that mask it |
+| [`disk-full.md`](docs/runbooks/disk-full.md) | Disk space exhaustion on either platform |
+| [`dc-wont-boot.md`](docs/runbooks/dc-wont-boot.md) | Domain controller recovery, and what a rebuild would cost |
+| [`add-monitored-host.md`](docs/runbooks/add-monitored-host.md) | Bringing a new host under monitoring |
+
+### Configuration and automation
+
+| Path | Contents |
+|---|---|
+| `monitoring/prometheus/` | Scrape config, 15 alert rules, promtool unit tests |
+| `monitoring/blackbox/` | DNS, TCP and ICMP probe modules |
+| `monitoring/alertmanager/` | Routing, grouping and inhibition |
+| `monitoring/grafana/` | Provisioned datasource and backup dashboard |
+| `scripts/linux/` | Backup, restore verification, alert receiver, systemd units |
+| `scripts/windows/` | Domain controller health check and its scheduled task |
+
+Alert rules are covered by `promtool` unit tests that run against synthetic
+series, so a rule can be proven to fire correctly without waiting for the
+condition to occur. The Windows health check carries a `-SelfTest` switch that
+validates its rendering logic without touching a live system.
+
+---
+
 ## Skills Demonstrated
 
 | Area | Detail |
@@ -232,10 +275,11 @@ Client resolver cache was flushed because it had negatively cached the failed lo
 | Windows Server | DNS, DHCP, SMB file services, service recovery configuration |
 | Access control | Share and NTFS permissions, inheritance, group-based access, token behaviour |
 | Linux administration | systemd services, cron, CIFS mounts via fstab, secure credential files |
-| Monitoring | Prometheus, Grafana, node metrics, scripted health checks |
-| Backup & recovery | Encrypted snapshot backup, unattended scheduling, verified restore |
+| Monitoring | Prometheus, Grafana, node and Windows exporters, blackbox probes, scripted health checks |
+| Alerting | Alert rules with unit tests, Alertmanager routing and inhibition, custom metrics from backup jobs |
+| Backup & recovery | Encrypted snapshot backup, unattended scheduling, automated and verified restore testing |
 | Troubleshooting | Layered isolation of a fault, root cause analysis, preventive remediation |
-| Documentation | Runbook-style writeups of configuration and incidents |
+| Documentation | Runbooks, policies, risk register, incident records |
 
 ---
 
@@ -246,5 +290,10 @@ Deliberately noted rather than hidden — this is a learning lab, not a producti
 - **Single domain controller.** No redundancy; DC01 is a single point of failure for identity, DNS, and DHCP. Production would run at least two.
 - **Backups are on-site.** BKP01 holds the only copy and sits on the same physical host as DC01. This satisfies neither the "2 media" nor "1 off-site" parts of the 3-2-1 rule.
 - **Lab-grade passwords.** Credentials follow a predictable pattern and would need rotation, length, and a proper secrets store before anything resembling production use.
-- **No certificate services or centralised logging.** PKI, syslog aggregation, and alert routing from Alertmanager are the natural next additions.
+- **The domain uses `.local`.** That suffix is reserved for multicast DNS, and a name under `.test` would have been correct. Not observed to cause a problem here, and accepted rather than rebuilt — the reasoning is in the risk register.
+- **The AD database is not backed up.** Only `CompanyShare` is protected. DC01 relies on VM snapshots, which are not backups.
+- **No certificate services or centralised logging.** PKI and syslog aggregation are the natural next additions.
+
+The full register, including likelihood, mitigations actually in place, and the
+risks that have been closed, is in [`docs/risks.md`](docs/risks.md).
 - **Health check logs locally only.** Results are written to a file on MON01; they are not yet exported to Prometheus or alerted on.
