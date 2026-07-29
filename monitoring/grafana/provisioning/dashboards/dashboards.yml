@@ -1,0 +1,27 @@
+# Grafana dashboard provisioning.
+#
+# Deployed to /etc/grafana/provisioning/dashboards/dashboards.yml on MON01,
+# with the dashboard JSON files copied to /var/lib/grafana/dashboards.
+#
+#   sudo mkdir -p /var/lib/grafana/dashboards
+#   sudo cp .../dashboards/*.json /var/lib/grafana/dashboards/
+#   sudo chown -R grafana:grafana /var/lib/grafana/dashboards
+#   sudo cp .../dashboards.yml /etc/grafana/provisioning/dashboards/
+#   sudo systemctl restart grafana-server
+
+apiVersion: 1
+
+providers:
+  - name: infralab
+    orgId: 1
+    folder: InfraLab
+    type: file
+    disableDeletion: true
+    updateIntervalSeconds: 30
+    # Same reasoning as the datasource: dashboards live in Git, not in whatever
+    # state someone left the UI in. A dashboard that only exists in Grafana's
+    # database disappears with the VM.
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false
