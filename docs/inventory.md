@@ -85,7 +85,7 @@ permanently unreadable — see `risks.md`.
 | Prometheus | 3.13.1 |
 | Grafana | 13.1.1 |
 | restic | 0.18.1 |
-| windows_exporter | _record actual version_ |
+| windows_exporter | 0.31.8 |
 
 Windows Server is an evaluation edition and expires 180 days from installation.
 Recorded in `risks.md` rather than left to be discovered.
