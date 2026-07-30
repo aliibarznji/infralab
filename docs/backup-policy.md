@@ -4,7 +4,7 @@
 
 | What | Backed up | How |
 |---|---|---|
-| `\\DC01\CompanyShare` | Yes | restic, pulled by BKP01 over a CIFS mount |
+| `\\DC01\CompanyShare` | Yes | restic, pulled by BKP01 over a CIFS mount managed by autofs |
 | DC01 system state and the AD database | **No** | VM snapshot only — see gaps |
 | MON01 configuration | Yes, in Git | Provisioned from this repository |
 | BKP01 restic repository | Not itself backed up | Integrity-checked on every run |
@@ -14,13 +14,31 @@
 
 ```
 \\DC01\CompanyShare
-        │  CIFS mount, credentials in /etc/dc01-creds (0600)
+        │  CIFS mount via autofs, credentials in /etc/dc01-creds (0600)
         ▼
 BKP01: /mnt/dc01-share
         │  restic backup --tag dc01-share
         ▼
 BKP01: /var/backups/restic-repo
 ```
+
+### autofs, not a static fstab mount
+
+`/mnt/dc01-share` is managed by autofs rather than a permanent `/etc/fstab`
+entry. autofs mounts the share on first access and unmounts it after a period of
+inactivity, remounting automatically the next time something touches the path.
+
+This changes what "the share went away" actually means for this lab. It was
+discovered during mount-guard testing: `sudo umount /mnt/dc01-share` did not
+simulate a failure, because autofs simply remounted it on the very next access
+— including the access the test script made to check `mountpoint`. The mount
+guard could not be exercised by unmounting the share by hand.
+
+The real failure mode autofs does *not* paper over is DC01 being unreachable.
+With DC01 powered off, autofs has nothing to remount from, so the automount
+fails and `/mnt/dc01-share` genuinely is not a mountpoint when the backup script
+checks. That is the test actually used — see
+[`docs/incidents/INC-003-stale-backup.md`](incidents/INC-003-stale-backup.md).
 
 Backups are **pulled**, not pushed. BKP01 holds the credential and reaches into
 DC01. DC01 has no credential for the repository and no route to write into it,
@@ -118,9 +136,9 @@ The restic repository is the backup. The snapshots are an undo button.
 | `/etc/dc01-creds` | CIFS mount credentials | 0600, root |
 | `/etc/restic-pass` | restic repository password | 0600, root |
 
-Both are referenced by path — from `/etc/fstab` and from the script's
-environment — rather than passed as arguments, so neither appears in the
-crontab, the script body, or in `ps` output visible to other users.
+Both are referenced by path — from the autofs map and from the script's
+environment — rather than passed as arguments, so neither appears in a job
+definition, the script body, or in `ps` output visible to other users.
 
 **The restic password has no recovery path.** There is no vendor reset: losing it
 makes every snapshot permanently unreadable. It is held in a password manager

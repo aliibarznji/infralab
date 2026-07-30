@@ -9,8 +9,9 @@
 | Affected systems | MON01, BKP01, DC01 |
 | Downtime | Brief Prometheus reload |
 
-> **Status: in progress.** Update this record as the deployment completes. The
-> procedure is [`docs/runbooks/deploy-monitoring.md`](../runbooks/deploy-monitoring.md).
+> **Status: deployed.** Verification results below are real, gathered during the
+> deployment described in
+> [`docs/runbooks/deploy-monitoring.md`](../runbooks/deploy-monitoring.md).
 
 ## Reason
 
@@ -41,7 +42,10 @@ dashboard provisioned from the repository rather than clicked together.
 **BKP01** — node_exporter with the textfile collector; `backup-dc01.sh` rewritten
 to publish exit code, last-success timestamp, snapshot count and mount status;
 `verify-restore.sh` added to automate the restore test that CHANGE-003 performed
-only once by hand.
+only once by hand. Both scripts moved from cron to systemd timers with
+`Persistent=true`, so a run missed while BKP01 is powered off (which happens
+whenever CLIENT01 is in use, to stay inside the RAM budget) executes at next
+boot instead of being silently skipped.
 
 ## Design decisions worth recording
 
@@ -62,6 +66,14 @@ every freshness check while protecting nothing.
 **The DNS check is a SOA query, not a port check.** A TCP probe on 53 proves
 something is listening, which was never the failing condition in INC-001.
 
+**The mount guard was tested against a real failure, not a simulated one.**
+`/mnt/dc01-share` turned out to be managed by autofs rather than a static
+`/etc/fstab` mount, so `umount` alone does not produce a failure — autofs
+remounts on the next access. DC01 was powered off instead, which genuinely
+prevents the automount from succeeding. See
+[`docs/incidents/INC-003-stale-backup.md`](../incidents/INC-003-stale-backup.md)
+and the autofs note in `docs/backup-policy.md`.
+
 ## Risk assessment
 
 | Risk | Mitigation |
@@ -79,16 +91,20 @@ script's previous version can be restored from Git. No data is at risk.
 
 ## Verification
 
-| Check | Expected |
-|---|---|
-| `promtool check config /etc/prometheus/prometheus.yml` | SUCCESS |
-| `curl localhost:9090/api/v1/rules` | 15 rules in 3 groups |
-| `curl 'localhost:9115/probe?target=192.168.56.10&module=dns_soa'` | `probe_success 1` |
-| `up{job="windows"}` | 1 |
-| Textfile probe metric served by node_exporter on BKP01 | present |
-| `backup-dc01.sh` with the share unmounted | exit 1, `mount_ok 0`, previous success timestamp preserved, no new snapshot |
-| `verify-restore.sh` | `Mismatch count: 0` |
+| Check | Expected | Result |
+|---|---|---|
+| `promtool check config /etc/prometheus/prometheus.yml` | SUCCESS | Passed |
+| `curl localhost:9090/api/v1/rules` | 15 rules in 3 groups | Passed |
+| `up{job="windows"}` | 1 | Confirmed — DC01 windows_exporter scraping successfully |
+| Textfile metrics served by node_exporter on BKP01 | present | Confirmed |
+| `backup-dc01.sh` against an unreachable share | exit 1, `mount_ok 0`, previous success timestamp preserved, no new snapshot | Confirmed — see INC-003 for the method actually used |
+| `backup-dc01.sh` after recovery | exit 0, `mount_ok 1`, snapshot count incremented | Confirmed — snapshot count went to 5 |
+| `verify-restore.sh` | `Mismatch count: 0` | Passed |
+| Cron → systemd timer migration | `infralab-backup.timer`, `infralab-restore-test.timer` active, `Persistent=true` | Completed |
 
 ## Outcome
 
-_To be recorded on completion._
+Completed. All alerting, probing and backup-metric infrastructure described
+above is deployed and verified on the running lab. The mount-guard test
+surfaced a design detail not anticipated at write time — autofs rather than a
+static mount — recorded in `docs/backup-policy.md` and `INC-003`.
