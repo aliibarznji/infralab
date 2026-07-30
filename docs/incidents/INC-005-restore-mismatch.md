@@ -1,14 +1,11 @@
 # INC-005 — Restore verification detects changed backup data
 
-> **Fields marked `_fill in_` need the real times from your session notes.**
-> Everything else reflects what was actually run and observed.
-
 | Field | Value |
 |---|---|
-| Date | _fill in_ |
-| Detected at | _fill in_ |
-| Resolved at | _fill in_ |
-| Duration | _fill in_ |
+| Date | 2026-07-30 |
+| Detected at | 09:02:02 UTC (`RestoreTestFailed` began firing; delivered to alert-sink 09:02:32) |
+| Resolved at | 09:07:32 UTC (resolution delivered to alert-sink) |
+| Duration | ~5 minutes |
 | Severity | Critical |
 | Affected systems | BKP01 |
 | Detected by | `RestoreTestFailed` |
@@ -27,20 +24,21 @@ itself modified.**
 `RestoreTestFailed` fired when `infralab_restore_test_success` went to `0`
 after the second test.
 
-_fill in: the alert-sink log entry and the exact time it moved from `pending`
-to `firing`, from `/var/log/alert-sink/alert-sink.log` on MON01._
+Confirmed from the alert-sink delivery log on MON01
+(`screenshots/monitoring/07-alert-sink-log.png`): `RestoreTestFailed`
+fired for `192.168.56.30:9100` with `startsAt` 09:02:02 UTC, delivered
+09:02:32, and its resolution was delivered at 09:07:32 — the ~5-minute
+window matching the rule's `for: 5m` plus Alertmanager's group timing.
 
 ## Timeline
 
-| Time | Event |
+| Time (UTC) | Event |
 |---|---|
-| _fill in_ | Part 1: negative test on a disposable restore copy, no live system affected |
-| _fill in_ | Part 2: extra file added to the live SMB share |
-| _fill in_ | `verify-restore.sh` run, exited 1 |
-| _fill in_ | `RestoreTestFailed` entered pending, then fired |
-| _fill in_ | Extra file removed, fresh backup taken |
-| _fill in_ | `verify-restore.sh` rerun, exited 0 |
-| _fill in_ | Alert resolved |
+| before 09:02 | Part 1: negative test on a disposable restore copy, no live system affected |
+| before 09:02 | Part 2: extra file added to the live SMB share; `verify-restore.sh` run, exited 1 |
+| 09:02:02 | `RestoreTestFailed` began firing; delivered to alert-sink 09:02:32 |
+| ~09:05 | Extra file removed, fresh backup taken, `verify-restore.sh` rerun — exited 0 |
+| 09:07:32 | Resolution delivered to alert-sink |
 
 ## Method
 

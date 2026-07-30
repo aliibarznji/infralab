@@ -237,6 +237,24 @@ Nothing here is claimed without a check that could have failed:
 
 ---
 
+## Evidence
+
+Eighteen screenshots of the running lab, indexed in
+[`screenshots/README.md`](screenshots/README.md) — the DHCP configuration that
+everything depended on, the domain working from a user's perspective, every
+Prometheus target up, backups and restores passing, and the alert-sink log
+capturing three incidents firing and resolving live with the timestamps the
+incident records cite.
+
+![InfraLab backup dashboard — all panels green](screenshots/monitoring/05-backup-dashboard.png)
+
+*The backup dashboard: time since last successful backup, last run result,
+time since last passing restore test, and mount state — backup and restore
+tracked as separate signals, because a backup can succeed while its restore
+fails.*
+
+---
+
 ## Known limitations
 
 Stated deliberately — this is a learning lab, and pretending otherwise would

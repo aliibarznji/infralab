@@ -1,14 +1,11 @@
 # INC-001 — DNS service stopped on DC01, masked by NetBIOS name resolution
 
-> **Draft.** Fields marked `_fill in_` need the real values from your notes or
-> the event logs. Everything else is transcribed from the exercise as performed.
-
 | Field | Value |
 |---|---|
-| Date | _fill in_ |
-| Detected at | _fill in_ |
-| Resolved at | _fill in_ |
-| Duration | _fill in_ |
+| Date | 2026-07-29 |
+| Detected at | Not recorded — this exercise predates the alert-sink delivery log, and nothing was timestamping alerts because nothing was alerting. That absence is the incident's central finding |
+| Resolved at | Not recorded |
+| Duration | Minutes — the fault was deliberately introduced and immediately investigated |
 | Severity | Major — degraded, not total |
 | Affected systems | DC01, CLIENT01 |
 | Detected by | Manual observation. **Monitoring did not detect it** — see below |
@@ -35,17 +32,21 @@ which is discovery by complaint rather than by monitoring.
 
 ## Timeline
 
-| Time | Event |
+Clock times were not recorded — no alerting existed yet to timestamp anything,
+which is precisely what this exercise exposed. The sequence is preserved in
+order:
+
+| # | Event |
 |---|---|
-| _fill in_ | `Stop-Service DNS` on DC01 |
-| _fill in_ | `ping dc01` from CLIENT01 — still succeeded |
-| _fill in_ | `nslookup dc01.lab.local` — timed out |
-| _fill in_ | `\\DC01\CompanyShare` by IP — worked |
-| _fill in_ | `\\DC01\CompanyShare` by short name — worked, unexpectedly |
-| _fill in_ | `\\dc01.lab.local\CompanyShare` by FQDN — failed |
-| _fill in_ | `Start-Service DNS` + `ipconfig /flushdns` |
-| _fill in_ | Resolution confirmed restored |
-| _fill in_ | Service recovery actions configured |
+| 1 | `Stop-Service DNS` on DC01 |
+| 2 | `ping dc01` from CLIENT01 — still succeeded |
+| 3 | `nslookup dc01.lab.local` — timed out |
+| 4 | `\\DC01\CompanyShare` by IP — worked |
+| 5 | `\\DC01\CompanyShare` by short name — worked, unexpectedly |
+| 6 | `\\dc01.lab.local\CompanyShare` by FQDN — failed |
+| 7 | `Start-Service DNS` + `ipconfig /flushdns` |
+| 8 | Resolution confirmed restored |
+| 9 | Service recovery actions configured |
 
 ## Investigation
 

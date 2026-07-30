@@ -1,13 +1,12 @@
 # INC-004 — Clock skew on CLIENT01, and an unresolved observation about Kerberos tolerance
 
-> **Fields marked `_fill in_` need the real times from your session notes.**
-> Everything else reflects what was actually run and observed. Unlike the other
-> incident records, this one ends without a fully confirmed root cause — that
-> is the honest result and is documented as such rather than papered over.
+> Unlike the other incident records, this one ends without a fully confirmed
+> root cause — that is the honest result and is documented as such rather than
+> papered over.
 
 | Field | Value |
 |---|---|
-| Date | _fill in_ |
+| Date | 2026-07-30 |
 | Severity | Major |
 | Affected systems | CLIENT01 |
 | Expected detection | None at the time of the exercise — see Prevention |
@@ -53,10 +52,9 @@ adds directly to the measured skew at the moment access was finally attempted.
 Roughly nine minutes of investigation between the shift and the successful
 reconnect would fully account for the difference.
 
-_fill in, if you want to close this specific point: what did `Get-Date` show
-immediately before running the successful `net use` command, versus
-immediately after `Set-Date`?_ This is a minor bookkeeping question, separate
-from the real one below.
+Not recorded: the exact `Get-Date` output immediately before the successful
+`net use`, versus immediately after `Set-Date`, would confirm this arithmetic.
+A minor bookkeeping point, separate from the real question below.
 
 ### The real open question: why did Kerberos tolerate it at all
 

@@ -1,14 +1,11 @@
 # INC-002 — Disk capacity exhausted on DC01
 
-> **Fields marked `_fill in_` need the real times from your session notes.**
-> Everything else reflects what was actually run and observed.
-
 | Field | Value |
 |---|---|
-| Date | _fill in_ |
-| Detected at | _fill in_ |
-| Resolved at | _fill in_ |
-| Duration | _fill in_ |
+| Date | 2026-07-30 |
+| Detected at | 08:34:50 UTC (`WindowsDiskSpaceLow` began firing; delivered to alert-sink 08:35:20) |
+| Resolved at | 08:50:20 UTC (resolution delivered to alert-sink) |
+| Duration | ~16 minutes |
 | Severity | Major |
 | Affected systems | DC01 |
 | Detected by | `WindowsDiskSpaceLow` |
@@ -26,20 +23,21 @@ in this run; only the warning path was exercised.
 `WindowsDiskSpaceLow` fired once usage on `E:` crossed 85% for the required
 `for: 5m` window.
 
-_fill in: the alert-sink log entry from `/var/log/alert-sink/alert-sink.log` on
-MON01, and whether the Prometheus alert page showed it move from `pending` to
-`firing` at the expected offset._
+Confirmed from the alert-sink delivery log on MON01
+(`screenshots/monitoring/07-alert-sink-log.png`): `WindowsDiskSpaceLow` fired
+for `192.168.56.10:9182` with summary "Volume E: is over 85% full",
+`startsAt` 08:34:50 UTC, delivered 08:35:20; its resolution was delivered at
+08:50:20. The gap between the fill crossing 85% and the alert firing includes
+the rule's deliberate `for: 5m` window.
 
 ## Timeline
 
-| Time | Event |
+| Time (UTC) | Event |
 |---|---|
-| _fill in_ | `fsutil file createnew E:\fill-01.bin ...` |
-| _fill in_ | Usage crossed 85% |
-| _fill in_ | `WindowsDiskSpaceLow` entered pending |
-| _fill in_ | `WindowsDiskSpaceLow` fired |
-| _fill in_ | Files removed |
-| _fill in_ | Alert resolved |
+| ~08:29 | `fsutil file createnew E:\fill-01.bin ...` — usage crossed 85%, `WindowsDiskSpaceLow` entered pending |
+| 08:34:50 | `WindowsDiskSpaceLow` fired after the 5m window; delivered to alert-sink 08:35:20 |
+| ~08:45 | Fill files removed |
+| 08:50:20 | Resolution delivered to alert-sink |
 
 ## Investigation
 

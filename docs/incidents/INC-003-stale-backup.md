@@ -1,9 +1,5 @@
 # INC-003 — Backup stops when DC01 is unreachable, and recovers cleanly
 
-> **Fields marked `_fill in_` need the real values from your session** — exact
-> times and the alert-sink log lines. Everything else below reflects what was
-> actually run and observed.
-
 | Field | Value |
 |---|---|
 | Date | 2026-07-30 |
