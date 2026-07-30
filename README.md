@@ -1,6 +1,8 @@
-# Mini Datacenter Infrastructure Lab
+# InfraLab
 
-A four-host datacenter built on one laptop and run like it matters: an Active
+**A mini datacenter, run like it matters.**
+
+Four hosts on one laptop: an Active
 Directory domain, full-stack monitoring with tested alert rules, encrypted
 backups that are **restored and checksum-verified on a schedule** rather than
 assumed to work, and five deliberately induced incidents — each detected,
