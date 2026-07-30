@@ -54,7 +54,7 @@
         {
           "refId": "A",
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "infralab_backup_last_run_success",
+          "expr": "infralab_backup_last_run_exit_code",
           "instant": true
         }
       ],
@@ -69,8 +69,15 @@
             {
               "type": "value",
               "options": {
-                "0": { "text": "FAILED", "color": "red", "index": 0 },
-                "1": { "text": "OK", "color": "green", "index": 1 }
+                "0": { "text": "OK", "color": "green", "index": 0 }
+              }
+            },
+            {
+              "type": "range",
+              "options": {
+                "from": 1,
+                "to": 255,
+                "result": { "text": "FAILED", "color": "red", "index": 1 }
               }
             }
           ],
@@ -117,14 +124,15 @@
     {
       "id": 4,
       "type": "stat",
-      "title": "SMB share readable",
+      "title": "SMB mount OK at last backup",
+      "description": "Whether the CIFS mount was up when backup-dc01.sh last ran. This lab has no independent continuous SMB check between backups — the mount guard inside the backup job is the only observer, so this reflects mount state only at that moment, not in real time.",
       "gridPos": { "h": 5, "w": 6, "x": 18, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "refId": "A",
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "infralab_smb_share_available",
+          "expr": "infralab_backup_mount_ok",
           "instant": true
         }
       ],
@@ -160,7 +168,7 @@
         {
           "refId": "A",
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "infralab_backup_last_run_success",
+          "expr": "infralab_backup_last_run_exit_code == bool 0",
           "legendFormat": "backup run"
         },
         {
@@ -172,8 +180,8 @@
         {
           "refId": "C",
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "infralab_smb_share_available",
-          "legendFormat": "smb readable"
+          "expr": "infralab_backup_mount_ok",
+          "legendFormat": "mount ok at backup time"
         }
       ],
       "fieldConfig": {
