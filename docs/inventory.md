@@ -78,7 +78,7 @@ permanently unreadable — see `risks.md`.
 
 | Component | Version |
 |---|---|
-| VMware Workstation Pro | _record actual version_ |
+| VMware Workstation Pro | 26H1 |
 | Windows Server | 2022 Standard, evaluation edition |
 | Ubuntu Server | 26.04 |
 | Windows client | 11 Pro |
