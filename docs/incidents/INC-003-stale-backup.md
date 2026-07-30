@@ -6,10 +6,10 @@
 
 | Field | Value |
 |---|---|
-| Date | _fill in_ |
-| Detected at | _fill in_ |
-| Resolved at | _fill in_ |
-| Duration | _fill in_ |
+| Date | 2026-07-30 |
+| Detected at | 07:19:17 UTC (`ICMPProbeFailed`/`DNSProbeFailed`/`TCPProbeFailed` on DC01) — `BackupFailed`/`BackupMountMissing` followed at 07:23:02 UTC |
+| Resolved at | 07:28:03 UTC |
+| Duration | ~9 minutes |
 | Severity | Critical |
 | Affected systems | BKP01 (backup path), DC01 (powered off for the test) |
 | Detected by | `backup-dc01.sh` mount guard, exit code and metrics |
@@ -38,22 +38,27 @@ unmounted mountpoint is an empty directory, and backing that up produces a
 valid, empty snapshot that would satisfy every downstream freshness check while
 protecting nothing.
 
-_fill in: did `BackupFailed` or `BackupMountMissing` also fire in Alertmanager
-during this test? Check `/var/log/alert-sink/alert-sink.log` on MON01 for the
-delivery and note the alert name and timestamp here._
+Confirmed from the alert-sink log on MON01. Both `BackupFailed` and
+`BackupMountMissing` fired at 07:23:02 UTC on `192.168.56.30:9100`, four
+minutes after DC01 itself was first detected unreachable — the delay is the
+`for: 5m` window on those rules. All four probe alerts against DC01
+(`ICMPProbeFailed`, `DNSProbeFailed`, `TCPProbeFailed` on ports 53, 445 and 88)
+fired together at 07:19:17–07:19:47, which is itself informative: they went
+down as a group, confirming this was DC01 being unreachable outright, not an
+isolated DNS-service failure the way INC-001 was.
 
 ## Timeline
 
-| Time | Event |
+| Time (UTC) | Event |
 |---|---|
-| _fill in_ | Attempted `sudo umount /mnt/dc01-share` |
-| _fill in_ | Ran `backup-dc01.sh` — succeeded anyway; discovered autofs had remounted the share |
-| _fill in_ | DC01 powered off |
-| _fill in_ | Ran `backup-dc01.sh` — failed as expected |
-| _fill in_ | Alert fired (if applicable) |
-| _fill in_ | DC01 powered back on |
-| _fill in_ | Ran `backup-dc01.sh` — succeeded |
-| _fill in_ | Alert resolved (if applicable) |
+| before 07:18:47 | Attempted `sudo umount /mnt/dc01-share`; ran `backup-dc01.sh` — succeeded anyway, discovered autofs had remounted the share |
+| ~07:18:47 | DC01 powered off |
+| 07:19:17–07:19:47 | `ICMPProbeFailed`, `DNSProbeFailed`, `TCPProbeFailed` (×3, ports 53/445/88) fired on `192.168.56.10` |
+| 07:23:02 | `backup-dc01.sh` ran against the unreachable share, failed as expected; `BackupFailed` and `BackupMountMissing` fired on `192.168.56.30:9100` |
+| ~07:24 | DC01 powered back on |
+| 07:24:17–07:24:47 | All four probe alerts on DC01 resolved |
+| 07:28:02–07:28:03 | `BackupFailed` and `BackupMountMissing` resolved |
+| after 07:28 | `backup-dc01.sh` rerun — succeeded |
 
 ## Investigation
 
