@@ -87,9 +87,12 @@ Alertmanager groups by `alertname` and `instance`, waits 30s to batch, and
 repeats every 4 hours for warnings and every hour for critical.
 
 Delivery goes to `alert-sink`, a small standard-library webhook receiver on
-loopback that appends every notification to a log file. Alertmanager's own UI
-shows what is firing now; an incident record needs to know what fired and when,
-and that requires a log.
+loopback that appends every notification to a log file. This matters more than
+it would elsewhere: the Debian `prometheus-alertmanager` package ships no web
+UI at all, only the HTTP API and `amtool`. Checking what is currently firing
+means `amtool alert query --alertmanager.url=http://localhost:9093`; knowing
+what fired and when — what an incident record actually needs — means the
+alert-sink log, regardless of which package built the UI.
 
 A `NodeDown` alert inhibits every other alert for the same instance. A host that
 is off will also trip its disk, service and probe checks, and the useful
