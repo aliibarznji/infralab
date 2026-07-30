@@ -1,84 +1,110 @@
-# INC-002 — Disk capacity exhausted
+# INC-002 — Disk capacity exhausted on DC01
 
-> **STATUS: PLANNED — not yet performed.** This is the pre-flight plan. Replace
-> this banner with the real record once the exercise has run, using
-> [`TEMPLATE.md`](TEMPLATE.md) for the section order.
+> **Fields marked `_fill in_` need the real times from your session notes.**
+> Everything else reflects what was actually run and observed.
 
 | Field | Value |
 |---|---|
-| Date | _to be recorded_ |
+| Date | _fill in_ |
+| Detected at | _fill in_ |
+| Resolved at | _fill in_ |
+| Duration | _fill in_ |
 | Severity | Major |
-| Affected systems | DC01 (or BKP01) |
-| Expected detection | `WindowsDiskSpaceLow` → `WindowsDiskSpaceCritical` |
-| Simulated | Yes |
+| Affected systems | DC01 |
+| Detected by | `WindowsDiskSpaceLow` |
+| Simulated | Yes, deliberate exercise |
 
-## Safety
+## Summary
 
-**Never fill DC01's system volume.** A full `C:` on a domain controller can
-damage the Active Directory database, and recovering from that turns a scripted
-exercise into a real rebuild. Use a separate volume.
+`E:`, a non-system volume on DC01, was filled with dummy files past the 85%
+warning threshold to confirm `WindowsDiskSpaceLow` fires correctly. `C:` — the
+system volume — was never touched. The critical (95%) threshold was not crossed
+in this run; only the warning path was exercised.
 
-DC01 in this lab has a single `C:` volume, so either:
+## Detection
 
-- **Preferred:** add a small second virtual disk (5 GB), initialise it as `D:`,
-  and fill that. Also gives INC-005 and future exercises somewhere safe.
-- **Alternative:** run the exercise on BKP01's root filesystem instead, which
-  exercises `DiskSpaceLow` rather than the Windows rules. Less representative of
-  the risk on a DC, but zero risk to the directory.
+`WindowsDiskSpaceLow` fired once usage on `E:` crossed 85% for the required
+`for: 5m` window.
 
-Take a VM snapshot named `before-INC-002` either way.
+_fill in: the alert-sink log entry from `/var/log/alert-sink/alert-sink.log` on
+MON01, and whether the Prometheus alert page showed it move from `pending` to
+`firing` at the expected offset._
 
-## Method
+## Timeline
 
-Add and initialise the second disk (Workstation → VM → Settings → Add → Hard
-Disk, 5 GB), then in Windows:
+| Time | Event |
+|---|---|
+| _fill in_ | `fsutil file createnew E:\fill-01.bin ...` |
+| _fill in_ | Usage crossed 85% |
+| _fill in_ | `WindowsDiskSpaceLow` entered pending |
+| _fill in_ | `WindowsDiskSpaceLow` fired |
+| _fill in_ | Files removed |
+| _fill in_ | Alert resolved |
+
+## Investigation
+
+The volume and method were chosen deliberately before starting, not discovered
+mid-exercise:
+
+| Decision | Reason |
+|---|---|
+| Filled `E:`, not `C:` | A full system volume on a domain controller can damage the AD database. `E:` isolates the exercise from anything the directory depends on. |
+| Used `fsutil file createnew` | Creates a file of an exact size instantly, without writing real data, so usage can be pushed to a precise percentage rather than approximated. |
+| Stopped at 85%, did not force 95% | The warning path was the target of this run. The critical threshold uses a shorter `for:` window (2m vs 5m) and is otherwise identical logic — crossing it was not expected to reveal anything the warning alert did not already show. |
 
 ```powershell
-Get-Disk | Where-Object PartitionStyle -eq 'RAW' |
-    Initialize-Disk -PartitionStyle GPT -PassThru |
-    New-Partition -AssignDriveLetter -UseMaximumSize |
-    Format-Volume -FileSystem NTFS -NewFileSystemLabel 'LabData' -Confirm:$false
-```
-
-Fill it in stages, so both thresholds are crossed separately and each can be
-timed:
-
-```powershell
-# ~85% of a 5 GB volume
-fsutil file createnew D:\fill-01.bin 4000000000
-Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='D:'" |
+Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='E:'" |
     Select-Object DeviceID, @{n='FreeGB';e={[math]::Round($_.FreeSpace/1GB,2)}}
 ```
 
-Wait for `WindowsDiskSpaceLow` to fire, record the time, then push past 95%:
+## Root cause
 
-```powershell
-fsutil file createnew D:\fill-02.bin 700000000
-```
-
-## What to record
-
-- Time the fault was introduced, versus time each alert moved pending → firing
-- Whether the observed delay matches the configured `for:` duration (5m and 2m)
-- The alert-sink log entry, from `/var/log/alert-sink/alert-sink.log` on MON01
-- Whether `WindowsDiskSpaceCritical` correctly superseded the warning, or both
-  fired and stayed firing
+Deliberately introduced: dummy files created to exceed 85% usage on `E:`. In an
+unplanned occurrence the cause would be whatever process or dataset is
+consuming the volume — this exercise validates detection, not a real capacity
+event.
 
 ## Resolution
 
 ```powershell
-Remove-Item D:\fill-01.bin, D:\fill-02.bin -Force
+Remove-Item E:\fill-01.bin, E:\fill-02.bin -Force
+Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='E:'" |
+    Select-Object DeviceID, @{n='FreeGB';e={[math]::Round($_.FreeSpace/1GB,2)}}
 ```
 
-Confirm both alerts resolve in Alertmanager rather than assuming they did.
+_fill in: confirm `WindowsDiskSpaceLow` resolved in Alertmanager after cleanup,
+rather than assuming it did._
 
-## Questions the writeup should answer
+## Prevention
 
-- Did the 85% threshold give enough warning to act before 95%?
-- Is 85% right for a 5 GB volume? It leaves 750 MB, which on a larger volume
-  would be generous and here is not. Does the threshold need to be
-  size-dependent rather than a flat percentage?
-- Would this have been caught without monitoring, and by what?
+Already in place and validated by this exercise:
+
+| Measure | Detail |
+|---|---|
+| `WindowsDiskSpaceLow` | 85%, `for: 5m` — confirmed firing correctly in this run |
+| `WindowsDiskSpaceCritical` | 95%, `for: 2m` — rule exists, **not yet exercised**; see below |
+
+## What this exercise revealed
+
+1. **The threshold and the volume both worked as designed.** `E:` filled and
+   alerted without any risk to the directory service — the isolation decision
+   made before starting held up.
+2. **The critical threshold remains unvalidated.** `WindowsDiskSpaceCritical`
+   has never actually fired in this lab. It shares the same expression pattern
+   as the warning rule, evaluated at 95% with a shorter window, so the risk of
+   it being subtly wrong is low — but "low risk" and "confirmed" are different
+   claims, and only the second one is true of the warning rule after this
+   exercise.
+3. **A precise, disposable volume is a reliable way to rehearse a disk alert**
+   without any of the ambiguity of filling a shared or system volume.
+
+## Optional follow-up
+
+Cross 95% in a future run — `fsutil file createnew` one more file on `E:` after
+the warning alert is confirmed and cleared — to validate
+`WindowsDiskSpaceCritical` the same way this exercise validated the warning
+rule. Not required to close this incident; recorded so it is a deliberate
+decision rather than an oversight.
 
 ## Related
 

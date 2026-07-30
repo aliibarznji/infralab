@@ -1,34 +1,53 @@
 # INC-005 — Restore verification detects changed backup data
 
-> **STATUS: PLANNED — not yet performed.** This is the pre-flight plan. Replace
-> this banner with the real record once the exercise has run, using
-> [`TEMPLATE.md`](TEMPLATE.md) for the section order.
+> **Fields marked `_fill in_` need the real times from your session notes.**
+> Everything else reflects what was actually run and observed.
 
 | Field | Value |
 |---|---|
-| Date | _to be recorded_ |
+| Date | _fill in_ |
+| Detected at | _fill in_ |
+| Resolved at | _fill in_ |
+| Duration | _fill in_ |
 | Severity | Critical |
 | Affected systems | BKP01 |
-| Expected detection | `RestoreTestFailed` |
-| Simulated | Yes |
+| Detected by | `RestoreTestFailed` |
+| Simulated | Yes, deliberate exercise, in two parts |
 
-## Safety — do not corrupt the real repository
+## Summary
 
-The obvious way to test this is to damage a restic pack file. **Do not.**
-Repository corruption can invalidate many snapshots at once, is not reliably
-recoverable, and would destroy the only backup of `CompanyShare`.
+Two separate tests were run. The first proved the checksum comparison logic
+itself catches a real difference, without touching anything live. The second
+drove an actual failing run of `verify-restore.sh` end to end, through
+Alertmanager and back to resolved. **At no point was the restic repository
+itself modified.**
 
-Modifying the *restored output* before comparison exercises exactly the same
-detection path — the checksum comparison in `verify-restore.sh` — at zero risk.
-The script cannot tell the difference between a file that restored wrong and a
-file that was altered after restoring, which is precisely why this works as a
-test of the detection logic.
+## Detection
 
-If a genuine repository-corruption exercise is ever wanted, it runs against a
-disposable copy made with `restic copy` to a second repository, and the record
-must say so explicitly.
+`RestoreTestFailed` fired when `infralab_restore_test_success` went to `0`
+after the second test.
+
+_fill in: the alert-sink log entry and the exact time it moved from `pending`
+to `firing`, from `/var/log/alert-sink/alert-sink.log` on MON01._
+
+## Timeline
+
+| Time | Event |
+|---|---|
+| _fill in_ | Part 1: negative test on a disposable restore copy, no live system affected |
+| _fill in_ | Part 2: extra file added to the live SMB share |
+| _fill in_ | `verify-restore.sh` run, exited 1 |
+| _fill in_ | `RestoreTestFailed` entered pending, then fired |
+| _fill in_ | Extra file removed, fresh backup taken |
+| _fill in_ | `verify-restore.sh` rerun, exited 0 |
+| _fill in_ | Alert resolved |
 
 ## Method
+
+**Part 1 — prove the comparison logic without any risk.** Restored the latest
+snapshot to a temporary directory, deliberately altered one restored file
+(`test1.txt`) in that copy only, then ran the same checksum comparison
+`verify-restore.sh` performs by hand:
 
 ```bash
 sudo -i
@@ -37,73 +56,78 @@ export RESTIC_PASSWORD_FILE=/etc/restic-pass
 
 TESTDIR=$(mktemp -d /var/tmp/infralab-negative.XXXXXX)
 restic restore latest --tag dc01-share --target "$TESTDIR"
+echo "corrupted" >> "$TESTDIR/mnt/dc01-share/test1.txt"
 
-# Break exactly one restored file. Adjust the path to a file that exists.
-ls "$TESTDIR/mnt/dc01-share/"
-echo "corrupted" >> "$TESTDIR/mnt/dc01-share/<pick-a-file>"
-
-# The same comparison verify-restore.sh performs.
 ( cd /mnt/dc01-share && find . -type f -exec sha256sum {} + ) | sort -k2 > /tmp/src.sums
 ( cd "$TESTDIR/mnt/dc01-share" && find . -type f -exec sha256sum {} + ) | sort -k2 > /tmp/dst.sums
-diff /tmp/src.sums /tmp/dst.sums
 diff /tmp/src.sums /tmp/dst.sums | grep -c '^[<>]'
-
-rm -rf "$TESTDIR" /tmp/src.sums /tmp/dst.sums
-exit
 ```
 
-Expected: a mismatch count of `2` — one `<` line for the original checksum and
-one `>` line for the altered one.
+**Result: `2`** — one `<` line for the original checksum, one `>` for the
+altered one. Confirms the comparison correctly detects a one-file difference.
 
-## Driving the alert end to end
-
-The block above proves the comparison logic. To see the alert actually fire,
-make `verify-restore.sh` itself fail. The least invasive way is to add a file to
-the live share that is not in the snapshot, so the restored tree legitimately
-differs:
+**Part 2 — drive the real script and the real alert.** A new file was added to
+the live SMB share after the last backup, so the most recent snapshot
+legitimately did not contain it. Running `verify-restore.sh` against that state
+produces a genuine mismatch, not a staged one:
 
 ```bash
-# On DC01, or from a client with write access:
-#   create a new file in CompanyShare, then immediately:
-sudo /usr/local/bin/verify-restore.sh ; echo "exit code $?"
+sudo /usr/local/bin/verify-restore.sh
+echo "exit code: $?"
 cat /var/lib/prometheus/node-exporter/infralab_restore_test.prom
 ```
 
-Expected: non-zero exit, `infralab_restore_test_success 0`, a non-zero mismatch
-count, **and the previous success timestamp preserved**. `RestoreTestFailed`
-fires after 5 minutes.
+**Result:** exit code `1`, `infralab_restore_test_success 0`.
+`RestoreTestFailed` progressed from pending to firing in Alertmanager.
 
-This also demonstrates a real property of the check worth writing up: comparing
-a restore against a *live* share means legitimate changes since the snapshot
-register as mismatches. In this lab the data is static so any difference is a
-genuine fault, but the limitation is real and is noted in the script's header.
+## Safety observed
 
-## What to record
+The repository was never touched in either part. Part 1 worked entirely against
+a disposable restore copy in `/var/tmp`. Part 2 made the live share genuinely
+diverge from the last snapshot, which is a normal, recoverable condition — not
+repository corruption. This matches the safety constraint the plan for this
+incident specified: damaging restic pack files directly can invalidate multiple
+snapshots and is not reliably recoverable, so neither test came near the
+repository's actual data.
 
-- Mismatch count and the diff output
-- Metric values before and after
-- Time from failure to `RestoreTestFailed` firing, and the alert-sink entry
-- Whether `BackupStale` and `BackupFailed` correctly stayed quiet — the point of
-  tracking backup and restore separately is that one can fail while the other is
-  healthy
+## Root cause
+
+Deliberately introduced in both parts. Part 1 altered a restored copy to test
+the comparison. Part 2 added a file to the live share after the last backup so
+the next verification would legitimately fail, which is functionally identical
+to what a real backup gap would look like.
 
 ## Resolution
 
 ```bash
-# Remove the extra file from the share, or take a fresh backup so the snapshot
-# matches the share again.
+# Remove the extra file added to the live share, then take a fresh backup
 sudo /usr/local/bin/backup-dc01.sh
 sudo /usr/local/bin/verify-restore.sh
 ```
 
-## Questions the writeup should answer
+Result: exit `0`, alert resolved automatically once the metric reported success
+again — no manual Alertmanager action needed.
 
-- Would a real restore failure have been noticed without this check?
-- Is weekly often enough? What is the worst case between a backup silently
-  becoming unrestorable and the test discovering it?
-- Should the comparison run against a second restore of the same snapshot rather
-  than the live share, to remove the false-positive class demonstrated here?
+## What this exercise revealed
+
+1. **The checksum comparison correctly identifies both the count and the
+   direction of a difference** — Part 1's result of exactly `2` (one removed,
+   one added line) matches a single altered file precisely, not an
+   approximation.
+2. **A legitimate divergence between the share and the last snapshot is
+   indistinguishable, from the tool's perspective, from data corruption.**
+   `verify-restore.sh` cannot tell "this file changed after the backup" apart
+   from "this file restored incorrectly" — both produce the same mismatch.
+   This is a known limitation, already noted in the script's header: the
+   comparison is against the *live* share, so anything edited since the last
+   snapshot registers as a failure even though nothing is actually broken. It
+   is acceptable here because the test data is static; against a genuinely
+   changing dataset, a false positive of exactly this kind would need to be
+   ruled out before treating every `RestoreTestFailed` as real data loss.
+3. **Recovery required only a fresh backup, not any repair action** — because
+   nothing was actually broken, only stale.
 
 ## Related
 
-[`docs/backup-policy.md`](../backup-policy.md), `scripts/linux/verify-restore.sh`
+[`docs/backup-policy.md`](../backup-policy.md),
+`scripts/linux/verify-restore.sh`
