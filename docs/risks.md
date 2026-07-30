@@ -75,3 +75,4 @@ risk management.
 | DNS service stayed down after failing | Service recovery configured to restart on first, second and subsequent failure; verified by the daily health check |
 | Backup failures were invisible until someone needed a restore | `backup-dc01.sh` publishes exit code, last-success timestamp, snapshot count and mount status to Prometheus; `BackupStale` alerts at 25h |
 | Restore was proven once by hand and never again | `verify-restore.sh` runs weekly and checksums the full restored tree |
+| Clock skew went unmonitored, and its failure mode (presenting as a permissions problem) went untested | `ClockSkewHigh` alert added; INC-004 exercised the failure directly. Partially closed only — the alert is a network-latency proxy, not a true offset reading, and INC-004 left the actual Kerberos tolerance in this domain unexplained |

@@ -1,131 +1,181 @@
-# INC-004 — Authentication fails from clock skew
+# INC-004 — Clock skew on CLIENT01, and an unresolved observation about Kerberos tolerance
 
-> **STATUS: PLANNED — not yet performed.** This is the pre-flight plan. Replace
-> this banner with the real record once the exercise has run, using
-> [`TEMPLATE.md`](TEMPLATE.md) for the section order.
+> **Fields marked `_fill in_` need the real times from your session notes.**
+> Everything else reflects what was actually run and observed. Unlike the other
+> incident records, this one ends without a fully confirmed root cause — that
+> is the honest result and is documented as such rather than papered over.
 
 | Field | Value |
 |---|---|
-| Date | _to be recorded_ |
+| Date | _fill in_ |
 | Severity | Major |
 | Affected systems | CLIENT01 |
-| Expected detection | **None.** Time offset is not currently alerted on |
+| Expected detection | None at the time of the exercise — see Prevention |
 | Simulated | Yes |
 
-## Safety — skew the client, not the domain controller
+## Summary
 
-**Change CLIENT01's clock. Do not change DC01's.**
+CLIENT01's clock was skewed forward and Kerberos tickets purged to force a fresh
+authentication. The domain's Kerberos `MaxClockSkew` policy was confirmed at 5
+minutes, but a reconnection to `\\dc01.lab.local\CompanyShare` **succeeded**
+despite roughly 19 minutes of measured skew. Investigation ruled out several
+obvious explanations without conclusively identifying the real one. Time was
+restored and normal operation confirmed. A `ClockSkewHigh` alert was added
+afterward, using the closest metric this windows_exporter build actually
+exposes — which is not a direct measurement of drift.
 
-DC01 holds the PDC Emulator FSMO role and is the authoritative time source for
-the entire domain. Skewing it propagates to every domain member, and unwinding
-that is considerably more work than the exercise is worth. Skewing the client
-produces an identical Kerberos failure and reverts cleanly.
+## Safety
 
-Take a VM snapshot of CLIENT01 named `before-INC-004` first.
+The exercise skewed **CLIENT01's** clock, not DC01's. DC01 holds the PDC
+Emulator role and is the domain's authoritative time source; skewing it would
+have cascaded to every domain member. This constraint was respected throughout.
 
-## Background
-
-Kerberos uses timestamps to prevent replay attacks, so it requires the client
-and the KDC to agree on the time within a tolerance — five minutes by default.
-Beyond that, the KDC rejects the authentication attempt outright.
-
-The reason this is worth exercising is that **the symptom does not look like a
-clock problem.** It presents as access denied, which sends people to check
-permissions and group membership. Recognising the real cause quickly is the
-skill being practised.
-
-## Method
-
-Run CLIENT01 with BKP01 shut down to stay inside the RAM budget.
+## Method and observations
 
 ```powershell
-# On CLIENT01, as administrator. Record the starting state first.
-w32tm /query /status
-w32tm /query /source
-
-Stop-Service w32time
+w32tm /query /status                      # baseline: synced to dc01.lab.local
+net stop w32time                          # required an elevated prompt as lab\administrator
 Set-Date (Get-Date).AddMinutes(10)
-Get-Date
-```
-
-Force a fresh authentication — cached tickets keep working until they expire, so
-without purging them nothing appears to break:
-
-```powershell
 klist purge
-klist
-net use \\DC01\CompanyShare /delete
 net use \\dc01.lab.local\CompanyShare
-gpupdate /force
 ```
 
-## What to record
+The reconnection **succeeded**. `w32tm /query /status`, checked afterward, showed
+roughly 19 minutes of skew rather than the 10 minutes originally set.
 
-- The exact error text returned
-- Security event log entries on **both** CLIENT01 and DC01 — the DC side shows
-  the rejection reason, which is where the real diagnosis is
-- Whether anything at all in monitoring reflected the problem
-- How long it took to identify the cause, and what was checked first
+### The 10-versus-19-minute gap is not itself the mystery
 
-```powershell
-Get-WinEvent -LogName Security -MaxEvents 40 |
-    Where-Object { $_.Id -in 4768, 4769, 4771 } |
-    Format-Table TimeCreated, Id, Message -AutoSize -Wrap
-```
+Once the clock is shifted, it continues running forward from the shifted
+baseline. Time spent investigating between the shift and the actual `net use`
+attempt — checking VMware Tools time sync (not installed), confirming
+`w32time` was genuinely stopped, and later reviewing the DC's Security log —
+adds directly to the measured skew at the moment access was finally attempted.
+Roughly nine minutes of investigation between the shift and the successful
+reconnect would fully account for the difference.
+
+_fill in, if you want to close this specific point: what did `Get-Date` show
+immediately before running the successful `net use` command, versus
+immediately after `Set-Date`?_ This is a minor bookkeeping question, separate
+from the real one below.
+
+### The real open question: why did Kerberos tolerate it at all
+
+`MaxClockSkew` was confirmed at 5 minutes via `secedit /export` on DC01. Neither
+10 minutes nor 19 minutes should have been within tolerance, yet:
+
+- DC01 Security event log entries for 4768 (TGT request) and 4769 (service
+  ticket request) around this period all showed `Failure Code: 0x0` — success.
+  No `0x25` (clock skew too great) failures were observed.
+- `w32time` was confirmed stopped throughout the skewed window.
+- VMware Tools, which can otherwise silently re-correct guest time, was
+  confirmed not installed.
+
+This was investigated but **not conclusively resolved**. Recorded as an
+observation rather than a finding, which is the correct call — asserting a
+cause that was not actually confirmed would be worse than leaving the question
+open.
+
+### Candidate explanations, none confirmed
+
+Listed as leads for anyone picking this back up, not as an answer:
+
+1. **An existing, still-valid ticket was reused rather than a fresh one being
+   issued at the skewed moment.** Kerberos checks clock skew primarily when a
+   ticket is first requested (the AS-REQ / TGS-REQ pre-authentication
+   timestamp), not necessarily every time an already-valid ticket is used to
+   establish a new session. `klist purge` clears the visible ticket cache for
+   the current logon session, but if a different logon context (for example,
+   the machine account, or a background service holding its own session) held
+   a ticket obtained *before* the clock was shifted, that ticket's own validity
+   window would still cover the access — no skew check would apply. **The
+   distinguishing test:** compare the exact `TimeCreated` of the successful
+   4768/4769 events against the exact moment `net use` was run. A ticket issued
+   *after* the skew was introduced and still accepted would be the more
+   interesting and harder-to-explain result; a ticket issued *before* the skew
+   would resolve this cleanly and mean the skew was simply never tested.
+
+2. **The effective KDC policy differs from what `secedit /export` reports.**
+   `secedit /export` reads the security database populated by the last applied
+   Default Domain Policy. Kerberos policy is read by the KDC service (`kdcsvc`)
+   at points that do not necessarily coincide with every `secedit` read, so the
+   configured value and the value the KDC was actually enforcing at the moment
+   of the test are not guaranteed to be the same thing.
+
+3. **A background time-correction path other than VMware Tools.** VMware Tools
+   was confirmed absent, but that does not rule out every mechanism by which
+   the guest's effective time could have been influenced — this was not
+   exhaustively tested beyond checking `w32time`'s own state.
+
+None of these were verified before time was restored, so none can be stated as
+the cause. If revisited, checking the 4768/4769 timestamps against the `net
+use` timestamp (candidate 1) is the cheapest test and the one most likely to
+either resolve or substantially narrow the question.
 
 ## Resolution
 
 ```powershell
-Start-Service w32time
+net stop w32time
+net start w32time
 w32tm /resync /force
-w32tm /query /status
+w32tm /query /status                      # confirmed synced, no warning
 klist purge
-net use \\dc01.lab.local\CompanyShare
+net use \\dc01.lab.local\CompanyShare      # succeeded normally
 ```
 
-If resync fails, re-point the client at the domain hierarchy explicitly:
+## Prevention
 
-```powershell
-w32tm /config /syncfromflags:domhier /update
-Restart-Service w32time
-w32tm /resync /force
-```
+**Not previously monitored at all.** Before this exercise, nothing in this lab
+watched clock offset, and the exercise itself demonstrates why that mattered:
+the failure this incident was designed to produce did not present as a time
+problem — it did not present as a failure at all.
 
-## The gap this is meant to expose
-
-Nothing alerts on clock offset today. `windows_exporter`'s `time` collector is
-already enabled and exposes the offset, so closing the gap means adding a rule
-rather than deploying anything:
+`ClockSkewHigh` was added afterward:
 
 ```yaml
-      - alert: ClockSkewHigh
-        expr: abs(windows_time_computed_time_offset_seconds) > 120
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "Clock on {{ $labels.instance }} is more than 2 minutes from its time source"
-          description: "Kerberos rejects authentication beyond roughly 5 minutes of skew, and the resulting failure presents as access denied rather than as a time problem. Alerting at 2 minutes gives room to correct it first."
+- alert: ClockSkewHigh
+  expr: windows_time_ntp_round_trip_delay_seconds > 300
+  for: 5m
+  labels:
+    severity: warning
 ```
 
-Verify the metric name against a live scrape before adding the rule — collector
-metric names change between windows_exporter versions:
+**This closes the monitoring gap only partially.** The windows_exporter build in
+this lab does not expose a direct clock-offset metric — only
+`windows_time_ntp_round_trip_delay_seconds`, the NTP round-trip network delay.
+That is a proxy, not a measurement of drift: a slow or congested link could trip
+this alert with the clock perfectly correct, and real drift is not guaranteed to
+produce a high round-trip time at all. It is recorded as an imperfect
+early-warning signal in `docs/monitoring-policy.md`, not represented as solving
+the problem it was added for.
 
-```bash
-curl -s 192.168.56.10:9182/metrics | grep -i time_ | head
-```
+Validated with `promtool check rules` (16 rules total) and a unit test asserting
+it fires on a sustained high value — the test confirms the *rule* behaves
+correctly, not that the underlying metric is a trustworthy skew indicator.
 
-Adding this rule is a legitimate outcome of the exercise and should be its own
-commit, so the improvement is traceable to the incident that motivated it.
+Deployed with `sudo systemctl restart prometheus` — `reload` is not supported by
+this packaged unit, a detail worth having in `docs/runbooks/deploy-monitoring.md`
+for the next person who tries `reload` first and wonders why nothing changed.
 
-## Questions the writeup should answer
+## What this exercise revealed
 
-- How long before the failure would have been diagnosed correctly without
-  knowing the cause in advance?
-- Which false leads did the symptom suggest — permissions, group membership,
-  the recent ACL changes?
-- Does the new rule's threshold leave enough margin before the Kerberos limit?
+1. **The intended failure did not occur, and that is itself the finding.**
+   INC-004 set out to demonstrate that clock skew breaks Kerberos in a way that
+   looks like a permissions problem. Instead it demonstrated something arguably
+   more useful: that the actual tolerance of this Kerberos deployment is not
+   fully understood, which is a gap worth knowing about independent of whether
+   the original failure mode was ever produced.
+2. **"Investigated and inconclusive" is a legitimate outcome**, and recording it
+   as such is more valuable than forcing a tidy conclusion. A future pass with
+   the specific timestamp comparison above would either resolve this or turn it
+   into a genuine, reproducible finding about Kerberos ticket reuse.
+3. **windows_exporter's available metrics do not always match what a plan
+   assumes.** The original INC-004 plan named
+   `windows_time_computed_time_offset_seconds` without having confirmed it
+   existed. It did not, on this build. The alert was written against what a
+   live scrape actually showed, not against the assumption — and the resulting
+   alert is honest about being weaker than originally intended as a result.
 
 ## Related
 
-[`docs/monitoring-policy.md`](../monitoring-policy.md) — known gaps
+[`docs/monitoring-policy.md`](../monitoring-policy.md) — known gaps,
+[`docs/risks.md`](../risks.md) — risks closed

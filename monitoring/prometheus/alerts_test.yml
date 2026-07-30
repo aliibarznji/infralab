@@ -113,3 +113,27 @@ tests:
             exp_annotations:
               summary: "DNS server 192.168.56.10 is not answering for lab.local"
               description: "The SOA query failed. Domain controller discovery and new authentication will fail while this persists, though existing sessions may continue on cached records and unexpired Kerberos tickets, and short names may still resolve via NetBIOS."
+
+  # Added after INC-004. This is a proxy signal, not a direct offset reading —
+  # the test only confirms the rule fires on a sustained high value, not that
+  # the value itself proves drift.
+  - interval: 1m
+    name: ClockSkewHigh fires when NTP round-trip delay stays above 300s
+    input_series:
+      - series: 'windows_time_ntp_round_trip_delay_seconds{instance="192.168.56.10:9182",job="windows",host="DC01"}'
+        values: '10 10 10 400 400 400 400 400 400'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: ClockSkewHigh
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: ClockSkewHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: "192.168.56.10:9182"
+              job: windows
+              host: DC01
+            exp_annotations:
+              summary: "Clock skew signal on 192.168.56.10:9182"
+              description: "NTP round-trip delay exceeds 5 minutes. This is a proxy for clock drift, not a direct offset measurement — verify with w32tm /query /status before treating it as confirmed skew. Skew past the domain's Kerberos tolerance can break authentication in a way that presents as a permissions problem rather than a time problem."

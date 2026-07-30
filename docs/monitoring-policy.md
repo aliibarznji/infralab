@@ -129,6 +129,12 @@ be equivalent.
 - **No end-to-end authentication check.** `dcdiag` on DC01 covers directory
   health, but nothing attempts an actual Kerberos authentication from a third
   host, which is what a user experiences.
-- **Time offset is not alerted on.** windows_exporter's `time` collector exposes
-  it; no rule consumes it yet. Clock skew past the Kerberos tolerance breaks
-  authentication in a way that presents as a permissions problem.
+- **No direct clock-offset alert.** `ClockSkewHigh`, added after INC-004, watches
+  `windows_time_ntp_round_trip_delay_seconds` — the only time-related metric this
+  windows_exporter build exposes. It is network round-trip latency for the NTP
+  exchange, not a measurement of actual drift, so it is at best a proxy: a slow
+  link can trip it with no skew present, and real drift will not reliably show
+  up in it. INC-004 also left an open question about how much clock skew
+  Kerberos in this domain actually tolerates in practice — the exercise found it
+  tolerating far more than the configured 5-minute policy would suggest, and the
+  cause was not conclusively identified.

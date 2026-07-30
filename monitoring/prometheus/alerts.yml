@@ -59,6 +59,22 @@ groups:
           summary: "Windows service {{ $labels.name }} is not running on {{ $labels.instance }}"
           description: "Service {{ $labels.name }} left the running state. Domain services depend on it."
 
+      # Added after INC-004. windows_exporter on this build does not expose an
+      # actual clock-offset metric, only the NTP round-trip delay, which is a
+      # network-latency figure and not a direct measure of drift. A host whose
+      # clock has genuinely drifted will not necessarily show a high round-trip
+      # delay, and a host on a slow link could trip this with no drift at all.
+      # Kept as an imperfect early-warning signal, not a substitute for a real
+      # offset check, which this exporter build cannot provide.
+      - alert: ClockSkewHigh
+        expr: windows_time_ntp_round_trip_delay_seconds > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Clock skew signal on {{ $labels.instance }}"
+          description: "NTP round-trip delay exceeds 5 minutes. This is a proxy for clock drift, not a direct offset measurement — verify with w32tm /query /status before treating it as confirmed skew. Skew past the domain's Kerberos tolerance can break authentication in a way that presents as a permissions problem rather than a time problem."
+
   - name: probes
     rules:
       # INC-001: stopping the DNS service did not look like an outage from
